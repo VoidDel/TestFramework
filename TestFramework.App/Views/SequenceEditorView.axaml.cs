@@ -1,6 +1,5 @@
 using System.Globalization;
 using Avalonia.Controls;
-using Avalonia.Platform.Storage;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.App.Services;
@@ -16,11 +15,6 @@ namespace TestFramework.App.Views;
 
 public sealed partial class SequenceEditorView : UserControl
 {
-    private static readonly FilePickerFileType YamlFileType = new("YAML")
-    {
-        Patterns = ["*.yaml", "*.yml"]
-    };
-
     private readonly PluginRegistry _pluginRegistry = new();
     private readonly ResourcePluginRegistry _resourcePluginRegistry = new();
     private readonly PluginSettingsEditorRegistry _settingsEditorRegistry = new();
@@ -28,19 +22,60 @@ public sealed partial class SequenceEditorView : UserControl
     private readonly TestSequenceValidator _validator;
 
     private TestSequence _sequence = new();
+    private readonly List<SequenceDocument> _sequenceDocuments = [];
+    private SequenceDocument? _currentDocument;
     private TestItemDefinition? _selectedItem;
     private TestStepDefinition? _selectedStep;
     private StepSection _selectedSection = StepSection.Init;
-    private string? _currentFile;
     private string? _selectedVariableName;
     private bool _updating = true;
-    private bool _clearingStepSelection;
+
+    public enum TreeNodeKind
+    {
+        Sequence,
+        Item,
+        Section,
+        Step
+    }
+
+    public sealed class SequenceTreeNode
+    {
+        public required string Title { get; init; }
+
+        public required TreeNodeKind Kind { get; init; }
+
+        public TestItemDefinition? Item { get; init; }
+
+        public StepSection? Section { get; init; }
+
+        public TestStepDefinition? Step { get; init; }
+
+        public List<SequenceTreeNode> Children { get; } = [];
+    }
 
     public sealed class VariableEntry
     {
         public required string Name { get; init; }
 
         public required string ValueText { get; init; }
+    }
+
+    public sealed class SequenceDocument
+    {
+        public required TestSequence Sequence { get; init; }
+
+        public string? FilePath { get; set; }
+
+        public string Name => Sequence.Name;
+    }
+
+    public sealed class Option<T>
+    {
+        public required T Value { get; init; }
+
+        public required string Text { get; init; }
+
+        public override string ToString() => Text;
     }
 
     public SequenceEditorView()
@@ -53,8 +88,19 @@ public sealed partial class SequenceEditorView : UserControl
 
         PluginCombo.ItemsSource = _pluginRegistry.Plugins;
         PluginCombo.SelectedIndex = 0;
+        VerdictTypeCombo.ItemsSource = new[]
+        {
+            new Option<VerdictJudgeType> { Value = VerdictJudgeType.PassFail, Text = "Pass/Fail" },
+            new Option<VerdictJudgeType> { Value = VerdictJudgeType.Numeric, Text = "值判定" },
+            new Option<VerdictJudgeType> { Value = VerdictJudgeType.String, Text = "字符串判定" }
+        };
+        StringModeCombo.ItemsSource = new[]
+        {
+            new Option<StringJudgeMode> { Value = StringJudgeMode.Exact, Text = "完全一致" },
+            new Option<StringJudgeMode> { Value = StringJudgeMode.Regex, Text = "正则匹配" }
+        };
 
-        _sequence = CreateDefaultSequence();
+        LoadSequenceDocuments();
         RefreshAll();
     }
 
@@ -121,7 +167,8 @@ public sealed partial class SequenceEditorView : UserControl
             VerdictSource = new VerdictSource
             {
                 StepId = mainCheck.Id,
-                OutputKey = "verdict"
+                OutputKey = "verdict",
+                JudgeType = VerdictJudgeType.PassFail
             }
         };
 
@@ -152,17 +199,80 @@ public sealed partial class SequenceEditorView : UserControl
         };
     }
 
+    private static string SequenceDirectory =>
+        Path.Combine(AppContext.BaseDirectory, "config", "sequence");
+
+    private void LoadSequenceDocuments()
+    {
+        Directory.CreateDirectory(SequenceDirectory);
+        _sequenceDocuments.Clear();
+
+        foreach (var file in Directory.EnumerateFiles(SequenceDirectory, "*.yml")
+                     .Concat(Directory.EnumerateFiles(SequenceDirectory, "*.yaml"))
+                     .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var sequence = _yamlService.LoadFromFile(file);
+                _sequenceDocuments.Add(new SequenceDocument
+                {
+                    Sequence = sequence,
+                    FilePath = file
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"序列加载失败：{file} - {ex.Message}");
+            }
+        }
+
+        if (_sequenceDocuments.Count == 0)
+        {
+            _currentDocument = CreateNewSequenceDocument();
+            _sequenceDocuments.Add(_currentDocument);
+        }
+        else
+        {
+            _currentDocument = _sequenceDocuments[0];
+        }
+
+        SetCurrentDocument(_currentDocument);
+    }
+
+    private SequenceDocument CreateNewSequenceDocument()
+    {
+        return new SequenceDocument
+        {
+            Sequence = CreateDefaultSequence()
+        };
+    }
+
+    private void SetCurrentDocument(SequenceDocument document)
+    {
+        _currentDocument = document;
+        _sequence = document.Sequence;
+        _selectedItem = _sequence.Items.FirstOrDefault();
+        _selectedStep = null;
+        _selectedVariableName = null;
+    }
+
     private void RefreshAll()
     {
         _updating = true;
+        RefreshSequenceCombo();
         SequenceNameBox.Text = _sequence.Name;
-        ItemsList.ItemsSource = null;
-        ItemsList.ItemsSource = _sequence.Items;
         _selectedItem ??= _sequence.Items.FirstOrDefault();
-        ItemsList.SelectedItem = _selectedItem;
+        RefreshSequenceTree();
         RefreshVariablesList();
         RefreshItemPanel();
         _updating = false;
+    }
+
+    private void RefreshSequenceCombo()
+    {
+        SequenceCombo.ItemsSource = null;
+        SequenceCombo.ItemsSource = _sequenceDocuments;
+        SequenceCombo.SelectedItem = _currentDocument;
     }
 
     private void RefreshItemPanel()
@@ -172,23 +282,22 @@ public sealed partial class SequenceEditorView : UserControl
         ItemNameBox.Text = _selectedItem?.Name ?? string.Empty;
         ItemEnabledBox.IsChecked = _selectedItem?.Enabled ?? false;
 
-        RefreshStepLists();
         RefreshVerdictControls();
+        RefreshTreeSelectionText();
 
         _updating = false;
     }
 
-    private void RefreshStepLists()
+    private void RefreshSequenceTree()
     {
-        InitStepsList.ItemsSource = null;
-        MainStepsList.ItemsSource = null;
-        CleanupStepsList.ItemsSource = null;
+        var wasUpdating = _updating;
+        _updating = true;
 
-        InitStepsList.ItemsSource = _selectedItem?.InitSteps;
-        MainStepsList.ItemsSource = _selectedItem?.MainSteps;
-        CleanupStepsList.ItemsSource = _selectedItem?.CleanupSteps;
+        var root = BuildSequenceTree();
+        SequenceTree.ItemsSource = new[] { root };
+        SequenceTree.SelectedItem = FindCurrentTreeNode(root) ?? root;
 
-        SelectStepInList();
+        _updating = wasUpdating;
     }
 
     private void RefreshVerdictControls()
@@ -200,27 +309,113 @@ public sealed partial class SequenceEditorView : UserControl
         {
             VerdictStepCombo.SelectedItem = null;
             VerdictOutputBox.Text = string.Empty;
+            VerdictTypeCombo.SelectedItem = null;
+            NumericLowerBox.Text = string.Empty;
+            NumericUpperBox.Text = string.Empty;
+            NumericSourceUnitBox.Text = string.Empty;
+            NumericUnitBox.Text = string.Empty;
+            StringModeCombo.SelectedItem = null;
+            ExpectedStringBox.Text = string.Empty;
+            NumericJudgePanel.IsVisible = false;
+            StringJudgePanel.IsVisible = false;
             return;
         }
 
         VerdictStepCombo.SelectedItem = _selectedItem.MainSteps.FirstOrDefault(step =>
             string.Equals(step.Id, _selectedItem.VerdictSource.StepId, StringComparison.OrdinalIgnoreCase));
         VerdictOutputBox.Text = _selectedItem.VerdictSource.OutputKey ?? string.Empty;
+        SelectOption(VerdictTypeCombo, _selectedItem.VerdictSource.JudgeType);
+        NumericLowerBox.Text = FormatNullableDouble(_selectedItem.VerdictSource.LowerLimit);
+        NumericUpperBox.Text = FormatNullableDouble(_selectedItem.VerdictSource.UpperLimit);
+        NumericSourceUnitBox.Text = _selectedItem.VerdictSource.SourceUnit ?? string.Empty;
+        NumericUnitBox.Text = _selectedItem.VerdictSource.Unit ?? string.Empty;
+        SelectOption(StringModeCombo, _selectedItem.VerdictSource.StringMode);
+        ExpectedStringBox.Text = _selectedItem.VerdictSource.ExpectedString ?? string.Empty;
+        NumericJudgePanel.IsVisible = _selectedItem.VerdictSource.JudgeType == VerdictJudgeType.Numeric;
+        StringJudgePanel.IsVisible = _selectedItem.VerdictSource.JudgeType == VerdictJudgeType.String;
     }
 
-    private void SelectStepInList()
+    private SequenceTreeNode BuildSequenceTree()
     {
-        _clearingStepSelection = true;
-        InitStepsList.SelectedItem = null;
-        MainStepsList.SelectedItem = null;
-        CleanupStepsList.SelectedItem = null;
-
-        if (_selectedStep is not null)
+        var root = new SequenceTreeNode
         {
-            GetStepListBox(_selectedSection).SelectedItem = _selectedStep;
+            Title = _sequence.Name,
+            Kind = TreeNodeKind.Sequence
+        };
+
+        foreach (var item in _sequence.Items)
+        {
+            var itemNode = new SequenceTreeNode
+            {
+                Title = item.Enabled ? item.Name : $"{item.Name}（禁用）",
+                Kind = TreeNodeKind.Item,
+                Item = item
+            };
+            itemNode.Children.Add(BuildSectionNode(item, StepSection.Init, "初始化", item.InitSteps));
+            itemNode.Children.Add(BuildSectionNode(item, StepSection.Main, "主流程", item.MainSteps));
+            itemNode.Children.Add(BuildSectionNode(item, StepSection.Cleanup, "清理", item.CleanupSteps));
+            root.Children.Add(itemNode);
         }
 
-        _clearingStepSelection = false;
+        return root;
+    }
+
+    private static SequenceTreeNode BuildSectionNode(
+        TestItemDefinition item,
+        StepSection section,
+        string title,
+        IReadOnlyList<TestStepDefinition> steps)
+    {
+        var sectionNode = new SequenceTreeNode
+        {
+            Title = $"{title} ({steps.Count})",
+            Kind = TreeNodeKind.Section,
+            Item = item,
+            Section = section
+        };
+
+        foreach (var step in steps)
+        {
+            sectionNode.Children.Add(new SequenceTreeNode
+            {
+                Title = step.Enabled ? step.Name : $"{step.Name}（禁用）",
+                Kind = TreeNodeKind.Step,
+                Item = item,
+                Section = section,
+                Step = step
+            });
+        }
+
+        return sectionNode;
+    }
+
+    private SequenceTreeNode? FindCurrentTreeNode(SequenceTreeNode root)
+    {
+        return FlattenTree(root).FirstOrDefault(node =>
+            _selectedStep is not null &&
+            node.Step is not null &&
+            string.Equals(node.Step.Id, _selectedStep.Id, StringComparison.OrdinalIgnoreCase)) ??
+               FlattenTree(root).FirstOrDefault(node =>
+                   _selectedItem is not null &&
+                   node.Kind == TreeNodeKind.Section &&
+                   ReferenceEquals(node.Item, _selectedItem) &&
+                   node.Section == _selectedSection) ??
+               FlattenTree(root).FirstOrDefault(node =>
+                   _selectedItem is not null &&
+                   node.Kind == TreeNodeKind.Item &&
+                   ReferenceEquals(node.Item, _selectedItem));
+    }
+
+    private static IEnumerable<SequenceTreeNode> FlattenTree(SequenceTreeNode node)
+    {
+        yield return node;
+        foreach (var child in node.Children)
+        {
+            foreach (var descendant in FlattenTree(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private List<TestStepDefinition>? GetCurrentSteps()
@@ -234,14 +429,23 @@ public sealed partial class SequenceEditorView : UserControl
         };
     }
 
-    private ListBox GetStepListBox(StepSection section)
+    private void RefreshTreeSelectionText()
+    {
+        TreeSelectionText.Text = _selectedItem is null
+            ? "在左侧树中选择测试项或 Step。"
+            : _selectedStep is null
+                ? $"当前测试项：{_selectedItem.Name}，添加 Step 将进入“{FormatSection(_selectedSection)}”。"
+                : $"当前 Step：{_selectedStep.Name}（{FormatSection(_selectedSection)}）。";
+    }
+
+    private static string FormatSection(StepSection section)
     {
         return section switch
         {
-            StepSection.Init => InitStepsList,
-            StepSection.Main => MainStepsList,
-            StepSection.Cleanup => CleanupStepsList,
-            _ => MainStepsList
+            StepSection.Init => "初始化",
+            StepSection.Main => "主流程",
+            StepSection.Cleanup => "清理",
+            _ => section.ToString()
         };
     }
 
@@ -336,6 +540,35 @@ public sealed partial class SequenceEditorView : UserControl
         };
     }
 
+    private static string FormatNullableDouble(double? value)
+    {
+        return value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    private static double? ParseNullableDouble(string? text)
+    {
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
+    }
+
+    private static string? EmptyToNull(string? text)
+    {
+        return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+    }
+
+    private static void SelectOption<T>(ComboBox comboBox, T value)
+    {
+        comboBox.SelectedItem = comboBox.ItemsSource?
+            .OfType<Option<T>>()
+            .FirstOrDefault(option => EqualityComparer<T>.Default.Equals(option.Value, value));
+    }
+
+    private static T? SelectedOptionValue<T>(ComboBox comboBox)
+    {
+        return comboBox.SelectedItem is Option<T> option ? option.Value : default;
+    }
+
     private static string FormatVerdict(TestVerdict verdict)
     {
         return verdict switch
@@ -375,63 +608,65 @@ public sealed partial class SequenceEditorView : UserControl
         return false;
     }
 
-    private async void New_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private string EnsureCurrentSequenceFilePath()
     {
-        _currentFile = null;
-        _selectedItem = null;
-        _selectedStep = null;
-        _selectedVariableName = null;
-        _sequence = CreateDefaultSequence();
+        Directory.CreateDirectory(SequenceDirectory);
+        _currentDocument ??= CreateNewSequenceDocument();
+        if (!_sequenceDocuments.Contains(_currentDocument))
+        {
+            _sequenceDocuments.Add(_currentDocument);
+        }
+
+        _currentDocument.FilePath ??= GetUniqueSequenceFilePath(_sequence.Name);
+        return _currentDocument.FilePath;
+    }
+
+    private string GetUniqueSequenceFilePath(string sequenceName)
+    {
+        Directory.CreateDirectory(SequenceDirectory);
+        var baseName = SanitizeFileName(string.IsNullOrWhiteSpace(sequenceName) ? "sequence" : sequenceName);
+        var candidate = Path.Combine(SequenceDirectory, $"{baseName}.yaml");
+        for (var index = 1; File.Exists(candidate); index++)
+        {
+            candidate = Path.Combine(SequenceDirectory, $"{baseName}{index}.yaml");
+        }
+
+        return candidate;
+    }
+
+    private string MakeUniqueSequenceName(string name)
+    {
+        var baseName = string.IsNullOrWhiteSpace(name) ? "测试序列" : $"{name} 副本";
+        return MakeUniqueName(_sequenceDocuments.Select(document => document.Sequence.Name), baseName);
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var sanitized = new string(fileName.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(sanitized) ? "sequence" : sanitized;
+    }
+
+    private void New_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var document = CreateNewSequenceDocument();
+        _sequenceDocuments.Add(document);
+        SetCurrentDocument(document);
         RefreshAll();
         AppendLog("已新建测试序列。");
     }
 
-    private async void Open_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
-        if (storageProvider is null)
-        {
-            StatusText.Text = "无法访问文件选择器。";
-            return;
-        }
-
-        var files = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-        {
-            Title = "打开测试序列",
-            AllowMultiple = false,
-            FileTypeFilter = [YamlFileType]
-        });
-
-        var file = files.FirstOrDefault()?.TryGetLocalPath();
-        if (string.IsNullOrWhiteSpace(file))
-        {
-            return;
-        }
-
-        _sequence = await _yamlService.LoadFromFileAsync(file);
-        _currentFile = file;
-        _selectedItem = _sequence.Items.FirstOrDefault();
-        _selectedStep = null;
-        _selectedVariableName = null;
-        RefreshAll();
-        AppendLog($"已打开：{file}");
-    }
-
     private async void Save_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(_currentFile))
-        {
-            await SaveAsAsync();
-            return;
-        }
-
         if (!ValidateForSaveOrRun())
         {
             return;
         }
 
-        await _yamlService.SaveToFileAsync(_sequence, _currentFile);
-        AppendLog($"已保存：{_currentFile}");
+        var file = EnsureCurrentSequenceFilePath();
+        await _yamlService.SaveToFileAsync(_sequence, file);
+        RefreshSequenceCombo();
+        AppendLog($"已保存：{file}");
     }
 
     private async void SaveAs_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -446,29 +681,45 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
-        if (storageProvider is null)
-        {
-            StatusText.Text = "无法访问文件选择器。";
-            return;
-        }
+        var yaml = _yamlService.Save(_sequence);
+        var copy = _yamlService.Load(yaml);
+        copy.Name = MakeUniqueSequenceName(copy.Name);
+        var file = GetUniqueSequenceFilePath(copy.Name);
+        await _yamlService.SaveToFileAsync(copy, file);
 
-        var file = (await storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        var document = new SequenceDocument
         {
-            Title = "保存测试序列",
-            SuggestedFileName = "测试序列.yaml",
-            DefaultExtension = "yaml",
-            FileTypeChoices = [YamlFileType]
-        }))?.TryGetLocalPath();
-
-        if (string.IsNullOrWhiteSpace(file))
-        {
-            return;
-        }
-
-        _currentFile = file;
-        await _yamlService.SaveToFileAsync(_sequence, file);
+            Sequence = copy,
+            FilePath = file
+        };
+        _sequenceDocuments.Add(document);
+        SetCurrentDocument(document);
+        RefreshAll();
         AppendLog($"已保存：{file}");
+    }
+
+    private void DeleteSequence_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_currentDocument is null)
+        {
+            return;
+        }
+
+        var removed = _currentDocument;
+        if (!string.IsNullOrWhiteSpace(removed.FilePath) && File.Exists(removed.FilePath))
+        {
+            File.Delete(removed.FilePath);
+            AppendLog($"已删除测试序列文件：{removed.FilePath}");
+        }
+
+        _sequenceDocuments.Remove(removed);
+        if (_sequenceDocuments.Count == 0)
+        {
+            _sequenceDocuments.Add(CreateNewSequenceDocument());
+        }
+
+        SetCurrentDocument(_sequenceDocuments[0]);
+        RefreshAll();
     }
 
     private async void Run_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -506,6 +757,7 @@ public sealed partial class SequenceEditorView : UserControl
         item.MainSteps.Add(main);
         item.VerdictSource.StepId = main.Id;
         item.VerdictSource.OutputKey = "verdict";
+        item.VerdictSource.JudgeType = VerdictJudgeType.PassFail;
 
         _sequence.Items.Add(item);
         _selectedItem = item;
@@ -619,26 +871,12 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedStep = step;
+        RefreshSequenceTree();
         RefreshItemPanel();
     }
 
     private async void EditStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await OpenSelectedStepEditorAsync();
-    }
-
-    private async void StepsList_OnDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
-    {
-        if (sender is ListBox listBox && listBox.SelectedItem is TestStepDefinition step)
-        {
-            _selectedSection = listBox == InitStepsList ? StepSection.Init :
-                listBox == MainStepsList ? StepSection.Main :
-                StepSection.Cleanup;
-            SectionTabs.SelectedIndex = _selectedSection == StepSection.Init ? 0 : _selectedSection == StepSection.Main ? 1 : 2;
-            _selectedStep = step;
-            SelectStepInList();
-        }
-
         await OpenSelectedStepEditorAsync();
     }
 
@@ -659,8 +897,9 @@ public sealed partial class SequenceEditorView : UserControl
             editor.Show();
         }
 
-        RefreshStepLists();
+        RefreshSequenceTree();
         RefreshVerdictControls();
+        RefreshTreeSelectionText();
     }
 
     private void CopyStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -675,6 +914,7 @@ public sealed partial class SequenceEditorView : UserControl
         var copy = _selectedStep.Clone();
         steps.Insert(index + 1, copy);
         _selectedStep = copy;
+        RefreshSequenceTree();
         RefreshItemPanel();
     }
 
@@ -695,6 +935,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedStep = steps.ElementAtOrDefault(Math.Clamp(index, 0, Math.Max(0, steps.Count - 1)));
+        RefreshSequenceTree();
         RefreshItemPanel();
     }
 
@@ -725,7 +966,8 @@ public sealed partial class SequenceEditorView : UserControl
 
         steps.RemoveAt(oldIndex);
         steps.Insert(newIndex, _selectedStep);
-        RefreshStepLists();
+        RefreshSequenceTree();
+        RefreshTreeSelectionText();
     }
 
     private void SequenceNameBox_OnTextChanged(object? sender, TextChangedEventArgs e)
@@ -742,24 +984,73 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _sequence.Name = text;
+        RefreshSequenceCombo();
+        RefreshSequenceTree();
     }
 
-    private void ItemsList_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private void SequenceCombo_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updating ||
+            SequenceCombo.SelectedItem is not SequenceDocument selected ||
+            ReferenceEquals(selected, _currentDocument))
+        {
+            return;
+        }
+
+        SetCurrentDocument(selected);
+        RefreshAll();
+    }
+
+    private void SequenceTree_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_updating)
         {
             return;
         }
 
-        var selected = ItemsList.SelectedItem as TestItemDefinition;
-        if (ReferenceEquals(selected, _selectedItem))
+        if (SequenceTree.SelectedItem is not SequenceTreeNode node)
         {
             return;
         }
 
-        _selectedItem = selected;
-        _selectedStep = null;
+        ApplyTreeSelection(node);
         RefreshItemPanel();
+    }
+
+    private async void SequenceTree_OnDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+    {
+        if (SequenceTree.SelectedItem is SequenceTreeNode { Kind: TreeNodeKind.Step } node)
+        {
+            ApplyTreeSelection(node);
+            await OpenSelectedStepEditorAsync();
+        }
+    }
+
+    private void ApplyTreeSelection(SequenceTreeNode node)
+    {
+        switch (node.Kind)
+        {
+            case TreeNodeKind.Sequence:
+                _selectedItem = null;
+                _selectedStep = null;
+                _selectedSection = StepSection.Main;
+                break;
+            case TreeNodeKind.Item:
+                _selectedItem = node.Item;
+                _selectedStep = null;
+                _selectedSection = StepSection.Main;
+                break;
+            case TreeNodeKind.Section:
+                _selectedItem = node.Item;
+                _selectedStep = null;
+                _selectedSection = node.Section ?? StepSection.Main;
+                break;
+            case TreeNodeKind.Step:
+                _selectedItem = node.Item;
+                _selectedStep = node.Step;
+                _selectedSection = node.Section ?? StepSection.Main;
+                break;
+        }
     }
 
     private void ItemNameBox_OnTextChanged(object? sender, TextChangedEventArgs e)
@@ -776,7 +1067,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedItem.Name = text;
-        RefreshItemsList();
+        RefreshSequenceTree();
     }
 
     private void ItemEnabledBox_OnChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -787,6 +1078,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedItem.Enabled = ItemEnabledBox.IsChecked == true;
+        RefreshSequenceTree();
     }
 
     private void VerdictStepCombo_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -823,63 +1115,65 @@ public sealed partial class SequenceEditorView : UserControl
         _selectedItem.VerdictSource.OutputKey = outputKey;
     }
 
-    private void SectionTabs_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private void VerdictTypeCombo_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (_updating)
+        if (_updating || _selectedItem is null)
         {
             return;
         }
 
-        var section = SectionTabs.SelectedIndex switch
-        {
-            0 => StepSection.Init,
-            1 => StepSection.Main,
-            2 => StepSection.Cleanup,
-            _ => StepSection.Init
-        };
-
-        if (section == _selectedSection)
-        {
-            return;
-        }
-
-        _selectedSection = section;
-        _selectedStep = GetStepListBox(_selectedSection).SelectedItem as TestStepDefinition;
-
+        var type = SelectedOptionValue<VerdictJudgeType>(VerdictTypeCombo);
+        _selectedItem.VerdictSource.JudgeType = type;
+        NumericJudgePanel.IsVisible = type == VerdictJudgeType.Numeric;
+        StringJudgePanel.IsVisible = type == VerdictJudgeType.String;
     }
 
-    private void StepsList_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private void NumericLowerBox_OnTextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_updating || _clearingStepSelection || sender is not ListBox listBox || listBox.SelectedItem is not TestStepDefinition step)
+        if (!_updating && _selectedItem is not null)
         {
-            return;
+            _selectedItem.VerdictSource.LowerLimit = ParseNullableDouble(NumericLowerBox.Text);
         }
-
-        var section = listBox == InitStepsList ? StepSection.Init :
-            listBox == MainStepsList ? StepSection.Main :
-            StepSection.Cleanup;
-        if (section == _selectedSection && ReferenceEquals(step, _selectedStep))
-        {
-            return;
-        }
-
-        _selectedSection = section;
-        SectionTabs.SelectedIndex = _selectedSection == StepSection.Init ? 0 : _selectedSection == StepSection.Main ? 1 : 2;
-        _selectedStep = step;
-        SelectStepInList();
-
     }
 
-    private void RefreshItemsList()
+    private void NumericUpperBox_OnTextChanged(object? sender, TextChangedEventArgs e)
     {
-        var wasUpdating = _updating;
-        _updating = true;
-
-        var selected = _selectedItem;
-        ItemsList.ItemsSource = null;
-        ItemsList.ItemsSource = _sequence.Items;
-        ItemsList.SelectedItem = selected;
-
-        _updating = wasUpdating;
+        if (!_updating && _selectedItem is not null)
+        {
+            _selectedItem.VerdictSource.UpperLimit = ParseNullableDouble(NumericUpperBox.Text);
+        }
     }
+
+    private void NumericSourceUnitBox_OnTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (!_updating && _selectedItem is not null)
+        {
+            _selectedItem.VerdictSource.SourceUnit = EmptyToNull(NumericSourceUnitBox.Text);
+        }
+    }
+
+    private void NumericUnitBox_OnTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (!_updating && _selectedItem is not null)
+        {
+            _selectedItem.VerdictSource.Unit = EmptyToNull(NumericUnitBox.Text);
+        }
+    }
+
+    private void StringModeCombo_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_updating && _selectedItem is not null)
+        {
+            _selectedItem.VerdictSource.StringMode = SelectedOptionValue<StringJudgeMode>(StringModeCombo);
+        }
+    }
+
+    private void ExpectedStringBox_OnTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (!_updating && _selectedItem is not null)
+        {
+            _selectedItem.VerdictSource.ExpectedString = ExpectedStringBox.Text;
+        }
+    }
+
 }

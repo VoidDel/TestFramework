@@ -58,9 +58,40 @@ public sealed class TestSequenceValidator
                 issues.Add(new ValidationIssue { Path = $"{itemPath}.verdictSource.stepId", Message = "Verdict source step must be in main steps." });
             }
 
+            ValidateVerdictSource(item.VerdictSource, $"{itemPath}.verdictSource", issues);
             ValidateSteps(item.InitSteps, $"{itemPath}.init", issues);
             ValidateSteps(item.MainSteps, $"{itemPath}.main", issues);
             ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", issues);
+        }
+    }
+
+    private static void ValidateVerdictSource(VerdictSource source, string path, ICollection<ValidationIssue> issues)
+    {
+        if (source.JudgeType is VerdictJudgeType.Numeric or VerdictJudgeType.String &&
+            string.IsNullOrWhiteSpace(source.OutputKey))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.outputKey", Message = "Configured verdict requires an output key." });
+        }
+
+        if (source.JudgeType == VerdictJudgeType.Numeric &&
+            !source.LowerLimit.HasValue &&
+            !source.UpperLimit.HasValue)
+        {
+            issues.Add(new ValidationIssue { Path = path, Message = "Numeric verdict requires lowerLimit or upperLimit." });
+        }
+
+        if (source.JudgeType == VerdictJudgeType.Numeric &&
+            source.LowerLimit.HasValue &&
+            source.UpperLimit.HasValue &&
+            source.LowerLimit.Value > source.UpperLimit.Value)
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.lowerLimit", Message = "Numeric lowerLimit must be less than or equal to upperLimit." });
+        }
+
+        if (source.JudgeType == VerdictJudgeType.String &&
+            string.IsNullOrEmpty(source.ExpectedString))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.expectedString", Message = "String verdict requires expectedString." });
         }
     }
 

@@ -47,6 +47,70 @@ public sealed class TestSequenceRunnerTests
         Assert.Equal("cleanup", item.CleanupResults[0].StepId);
     }
 
+    [Fact]
+    public async Task RunAsync_NumericVerdict_ConvertsUnitsBeforeComparingLimits()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new OutputPlugin("measure", 5000, TestVerdict.Pass));
+
+        var sequence = new TestSequence
+        {
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    MainSteps = [Step("main", "measure", ErrorHandlingMode.Stop)],
+                    VerdictSource = new VerdictSource
+                    {
+                        StepId = "main",
+                        OutputKey = "value",
+                        JudgeType = VerdictJudgeType.Numeric,
+                        LowerLimit = 4.9,
+                        UpperLimit = 5.1,
+                        SourceUnit = "mV",
+                        Unit = "V"
+                    }
+                }
+            ]
+        };
+
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+
+        Assert.Equal(TestVerdict.Pass, Assert.Single(result.ItemResults).Verdict);
+    }
+
+    [Fact]
+    public async Task RunAsync_StringVerdict_SupportsRegex()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new OutputPlugin("read", "SN-12345", TestVerdict.Fail));
+
+        var sequence = new TestSequence
+        {
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    MainSteps = [Step("main", "read", ErrorHandlingMode.Stop)],
+                    VerdictSource = new VerdictSource
+                    {
+                        StepId = "main",
+                        OutputKey = "text",
+                        JudgeType = VerdictJudgeType.String,
+                        StringMode = StringJudgeMode.Regex,
+                        ExpectedString = @"^SN-\d+$"
+                    }
+                }
+            ]
+        };
+
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+
+        Assert.Equal(TestVerdict.Pass, Assert.Single(result.ItemResults).Verdict);
+    }
+
     private static TestStepDefinition Step(string id, string pluginId, ErrorHandlingMode onError)
     {
         return new TestStepDefinition
@@ -121,6 +185,50 @@ public sealed class TestSequenceRunnerTests
             CancellationToken cancellationToken)
         {
             throw new InvalidOperationException("boom");
+        }
+    }
+
+    private sealed class OutputPlugin : ITestStepPlugin
+    {
+        private readonly object? _value;
+        private readonly TestVerdict _verdict;
+
+        public OutputPlugin(string pluginId, object? value, TestVerdict verdict)
+        {
+            _value = value;
+            _verdict = verdict;
+            Descriptor = new TestStepPluginDescriptor
+            {
+                PluginId = pluginId,
+                DisplayName = pluginId,
+                Version = new Version(1, 0, 0)
+            };
+        }
+
+        public TestStepPluginDescriptor Descriptor { get; }
+
+        public Type SettingsType => typeof(object);
+
+        public object CreateDefaultSettings() => new();
+
+        public object LoadSettings(IReadOnlyDictionary<string, object?> parameters) => new();
+
+        public IReadOnlyDictionary<string, object?> SaveSettings(object settings) => new Dictionary<string, object?>();
+
+        public Task<TestStepResult> ExecuteAsync(
+            TestStepExecutionContext context,
+            object settings,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new TestStepResult
+            {
+                Verdict = _verdict,
+                Outputs =
+                {
+                    ["value"] = _value,
+                    ["text"] = _value
+                }
+            });
         }
     }
 }

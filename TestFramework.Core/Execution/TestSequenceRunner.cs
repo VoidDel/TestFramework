@@ -3,6 +3,7 @@ using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.Abstractions.Resources;
 using TestFramework.Core.Variables;
+using System.Text.RegularExpressions;
 
 namespace TestFramework.Core.Execution;
 
@@ -325,10 +326,61 @@ public sealed class TestSequenceRunner
         if (!string.IsNullOrWhiteSpace(item.VerdictSource.OutputKey) &&
             verdictSource.Outputs.TryGetValue(item.VerdictSource.OutputKey, out var value))
         {
-            return ConvertOutputToVerdict(value);
+            return ResolveConfiguredVerdict(item.VerdictSource, value);
         }
 
-        return verdictSource.Verdict;
+        return item.VerdictSource.JudgeType == VerdictJudgeType.PassFail
+            ? verdictSource.Verdict
+            : TestVerdict.Inconclusive;
+    }
+
+    private static TestVerdict ResolveConfiguredVerdict(VerdictSource source, object? value)
+    {
+        return source.JudgeType switch
+        {
+            VerdictJudgeType.Numeric => ResolveNumericVerdict(source, value),
+            VerdictJudgeType.String => ResolveStringVerdict(source, value),
+            _ => ConvertOutputToVerdict(value)
+        };
+    }
+
+    private static TestVerdict ResolveNumericVerdict(VerdictSource source, object? value)
+    {
+        if (!UnitConverter.TryConvertToDouble(value, source.SourceUnit, source.Unit, out var number))
+        {
+            return TestVerdict.Inconclusive;
+        }
+
+        if (source.LowerLimit.HasValue && number < source.LowerLimit.Value)
+        {
+            return TestVerdict.Fail;
+        }
+
+        if (source.UpperLimit.HasValue && number > source.UpperLimit.Value)
+        {
+            return TestVerdict.Fail;
+        }
+
+        return TestVerdict.Pass;
+    }
+
+    private static TestVerdict ResolveStringVerdict(VerdictSource source, object? value)
+    {
+        var text = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        var expected = source.ExpectedString ?? string.Empty;
+        try
+        {
+            var passed = source.StringMode switch
+            {
+                StringJudgeMode.Regex => Regex.IsMatch(text, expected),
+                _ => string.Equals(text, expected, StringComparison.Ordinal)
+            };
+            return passed ? TestVerdict.Pass : TestVerdict.Fail;
+        }
+        catch (ArgumentException)
+        {
+            return TestVerdict.Inconclusive;
+        }
     }
 
     private static TestVerdict ConvertOutputToVerdict(object? value)

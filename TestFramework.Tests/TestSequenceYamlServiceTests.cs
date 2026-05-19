@@ -58,7 +58,12 @@ public sealed class TestSequenceYamlServiceTests
                     VerdictSource = new VerdictSource
                     {
                         StepId = "main",
-                        OutputKey = "verdict"
+                        OutputKey = "verdict",
+                        JudgeType = VerdictJudgeType.Numeric,
+                        LowerLimit = 4.8,
+                        UpperLimit = 5.2,
+                        SourceUnit = "mV",
+                        Unit = "V"
                     }
                 }
             ]
@@ -76,6 +81,11 @@ public sealed class TestSequenceYamlServiceTests
         Assert.Single(item.CleanupSteps);
         Assert.Equal("main", item.VerdictSource.StepId);
         Assert.Equal("verdict", item.VerdictSource.OutputKey);
+        Assert.Equal(VerdictJudgeType.Numeric, item.VerdictSource.JudgeType);
+        Assert.Equal(4.8, item.VerdictSource.LowerLimit);
+        Assert.Equal(5.2, item.VerdictSource.UpperLimit);
+        Assert.Equal("mV", item.VerdictSource.SourceUnit);
+        Assert.Equal("V", item.VerdictSource.Unit);
     }
 
     private static TestStepDefinition Step(string id)

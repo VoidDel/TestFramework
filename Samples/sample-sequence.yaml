@@ -1,0 +1,61 @@
+schemaVersion: 1
+id: demo-sequence
+name: Demo Test Sequence
+variables:
+  dutSerial: ""
+  targetVoltage: 5.0
+  voltageMin: 4.8
+  voltageMax: 5.2
+items:
+- id: voltage-test
+  name: Voltage Test
+  enabled: true
+  verdictSource:
+    stepId: check-voltage
+    outputKey: verdict
+  init:
+  - id: initialize-fixture
+    name: Initialize Fixture
+    pluginId: basic.log
+    pluginVersion: "1.0.0"
+    enabled: true
+    timeoutMs:
+    onError: stop
+    parameters:
+      Message: Initialize fixture for DUT-${dutSerial}
+  main:
+  - id: wait-stable
+    name: Wait For Stable State
+    pluginId: basic.delay
+    pluginVersion: "1.0.0"
+    enabled: true
+    timeoutMs: 2000
+    onError: stop
+    parameters:
+      DelayMs: 500
+  - id: check-voltage
+    name: Check Voltage
+    pluginId: basic.limit-check
+    pluginVersion: "1.0.0"
+    enabled: true
+    timeoutMs:
+    onError: jumpToCleanup
+    parameters:
+      Value: ${targetVoltage}
+      Min: ${voltageMin}
+      Max: ${voltageMax}
+    variableWrites:
+    - name: measuredVoltage
+      outputKey: value
+    - name: voltageVerdict
+      outputKey: verdict
+  cleanup:
+  - id: cleanup-fixture
+    name: Cleanup Fixture
+    pluginId: basic.log
+    pluginVersion: "1.0.0"
+    enabled: true
+    timeoutMs:
+    onError: continue
+    parameters:
+      Message: Cleanup fixture

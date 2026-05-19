@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TestFramework.App.Views.StepEditorWindow"
+        Title="编辑 Step"
+        Width="560"
+        Height="760"
+        MinWidth="480"
+        MinHeight="620">
+  <Grid RowDefinitions="*,Auto" Margin="12">
+    <Border BorderBrush="#D0D7DE" BorderThickness="1" CornerRadius="6" Padding="10">
+      <ScrollViewer>
+        <StackPanel>
+          <TextBlock Text="Step 属性" FontSize="16" FontWeight="SemiBold" />
+          <TextBlock Classes="form-label" Text="名称" />
+          <TextBox Name="StepNameBox" TextChanged="StepNameBox_OnTextChanged" />
+          <CheckBox Name="StepEnabledBox" Content="启用" Margin="0,8,0,0" IsCheckedChanged="StepEnabledBox_OnChanged" />
+          <TextBlock Classes="form-label" Text="插件" />
+          <TextBox Name="StepPluginBox" IsReadOnly="True" />
+          <TextBlock Classes="form-label" Text="超时 ms" />
+          <TextBox Name="TimeoutBox" PlaceholderText="留空表示不超时" TextChanged="TimeoutBox_OnTextChanged" />
+          <TextBlock Classes="form-label" Text="错误处理" />
+          <ComboBox Name="ErrorHandlingBox" SelectionChanged="ErrorHandlingBox_OnSelectionChanged">
+            <ComboBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding DisplayName}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <Separator Margin="0,14,0,10" />
+          <ContentControl Name="PluginSettingsContent" />
+          <Separator Margin="0,14,0,10" />
+          <TextBlock Text="原始参数" FontSize="16" FontWeight="SemiBold" />
+          <ListBox Name="ParametersList" Height="120" SelectionChanged="ParametersList_OnSelectionChanged">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <StackPanel>
+                  <TextBlock Text="{Binding Key}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding ValueText}" FontSize="12" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <TextBlock Classes="form-label" Text="键" />
+          <TextBox Name="ParameterKeyBox" TextChanged="ParameterKeyBox_OnTextChanged" />
+          <TextBlock Classes="form-label" Text="值" />
+          <TextBox Name="ParameterValueBox" TextChanged="ParameterValueBox_OnTextChanged" />
+          <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="添加参数" Click="AddParameter_OnClick" />
+            <Button Content="删除" Click="DeleteParameter_OnClick" />
+          </StackPanel>
+          <Separator Margin="0,14,0,10" />
+          <TextBlock Text="变量写入" FontSize="16" FontWeight="SemiBold" />
+          <ListBox Name="VariableWritesList" Height="120" SelectionChanged="VariableWritesList_OnSelectionChanged">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <StackPanel>
+                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SourceText}" FontSize="12" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <TextBlock Classes="form-label" Text="变量名" />
+          <TextBox Name="VariableWriteNameBox" TextChanged="VariableWriteNameBox_OnTextChanged" />
+          <TextBlock Classes="form-label" Text="输出键" />
+          <TextBox Name="VariableWriteOutputKeyBox" PlaceholderText="输出键；留空则使用固定值" TextChanged="VariableWriteOutputKeyBox_OnTextChanged" />
+          <TextBlock Classes="form-label" Text="固定值" />
+          <TextBox Name="VariableWriteValueBox" PlaceholderText="字面值或 ${变量名}" TextChanged="VariableWriteValueBox_OnTextChanged" />
+          <CheckBox Name="VariableWriteOnErrorBox" Content="错误时也写入" Margin="0,8,0,0" IsCheckedChanged="VariableWriteOnErrorBox_OnChanged" />
+          <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="添加写入" Click="AddVariableWrite_OnClick" />
+            <Button Content="删除" Click="DeleteVariableWrite_OnClick" />
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+      <Button Content="关闭" Click="Close_OnClick" />
+    </StackPanel>
+  </Grid>
+</Window>

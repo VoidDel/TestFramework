@@ -1,0 +1,151 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="TestFramework.App.Views.SequenceEditorView">
+  <Grid RowDefinitions="Auto,*,180" ColumnDefinitions="260,*" Margin="12">
+    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6" Margin="0,0,0,10">
+      <Button Content="新建" Click="New_OnClick" />
+      <Button Content="打开" Click="Open_OnClick" />
+      <Button Content="保存" Click="Save_OnClick" />
+      <Button Content="另存为" Click="SaveAs_OnClick" />
+      <Button Content="运行" Click="Run_OnClick" />
+      <TextBlock Name="StatusText" VerticalAlignment="Center" Margin="12,0,0,0" />
+    </StackPanel>
+
+    <Border Grid.Row="1" Grid.Column="0" BorderBrush="#D0D7DE" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,10,0">
+      <Grid RowDefinitions="Auto,Auto,*">
+        <TextBlock Text="测试序列" FontSize="16" FontWeight="SemiBold" />
+        <StackPanel Grid.Row="1" Margin="0,10,0,8">
+          <TextBlock Classes="form-label" Text="名称" />
+          <TextBox Name="SequenceNameBox" TextChanged="SequenceNameBox_OnTextChanged" />
+        </StackPanel>
+        <TabControl Grid.Row="2">
+          <TabItem Header="测试项">
+            <Grid RowDefinitions="*,Auto">
+              <ListBox Name="ItemsList" SelectionChanged="ItemsList_OnSelectionChanged">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding Name}" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                <Button Content="添加" Click="AddItem_OnClick" />
+                <Button Content="删除" Click="DeleteItem_OnClick" />
+              </StackPanel>
+            </Grid>
+          </TabItem>
+          <TabItem Header="变量">
+            <Grid RowDefinitions="*,Auto,Auto,Auto">
+              <ListBox Name="VariablesList" SelectionChanged="VariablesList_OnSelectionChanged">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel>
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                      <TextBlock Text="{Binding ValueText}" FontSize="12" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <StackPanel Grid.Row="1" Margin="0,8,0,0">
+                <TextBlock Classes="form-label" Text="名称" />
+                <TextBox Name="VariableNameBox" TextChanged="VariableNameBox_OnTextChanged" />
+              </StackPanel>
+              <StackPanel Grid.Row="2" Margin="0,8,0,0">
+                <TextBlock Classes="form-label" Text="值" />
+                <TextBox Name="VariableValueBox" TextChanged="VariableValueBox_OnTextChanged" />
+              </StackPanel>
+              <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0">
+                <Button Content="添加" Click="AddVariable_OnClick" />
+                <Button Content="删除" Click="DeleteVariable_OnClick" />
+              </StackPanel>
+            </Grid>
+          </TabItem>
+        </TabControl>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1" Grid.Column="1" BorderBrush="#D0D7DE" BorderThickness="1" CornerRadius="6" Padding="10">
+      <Grid RowDefinitions="Auto,Auto,*">
+        <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+          <StackPanel>
+            <TextBlock Text="测试项" FontSize="16" FontWeight="SemiBold" />
+            <TextBox Name="ItemNameBox" Margin="0,8,0,0" TextChanged="ItemNameBox_OnTextChanged" />
+          </StackPanel>
+          <CheckBox Grid.Column="1" Name="ItemEnabledBox" Content="启用" VerticalAlignment="Bottom" IsCheckedChanged="ItemEnabledBox_OnChanged" />
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,*" Margin="0,0,0,8">
+          <StackPanel Margin="0,0,6,0">
+            <TextBlock Classes="form-label" Text="判定 Step" />
+            <ComboBox Name="VerdictStepCombo" SelectionChanged="VerdictStepCombo_OnSelectionChanged">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding Name}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+          <StackPanel Grid.Column="1" Margin="6,0,0,0">
+            <TextBlock Classes="form-label" Text="判定输出键" />
+            <TextBox Name="VerdictOutputBox" PlaceholderText="可选" TextChanged="VerdictOutputBox_OnTextChanged" />
+          </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="2" RowDefinitions="Auto,*">
+          <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,8">
+            <ComboBox Name="PluginCombo" Width="210">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding Descriptor.DisplayName}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button Content="添加 Step" Click="AddStep_OnClick" />
+            <Button Content="编辑" Click="EditStep_OnClick" />
+            <Button Content="复制" Click="CopyStep_OnClick" />
+            <Button Content="删除" Click="DeleteStep_OnClick" />
+            <Button Content="上移" Click="MoveStepUp_OnClick" />
+            <Button Content="下移" Click="MoveStepDown_OnClick" />
+          </StackPanel>
+
+          <TabControl Grid.Row="1" Name="SectionTabs" SelectionChanged="SectionTabs_OnSelectionChanged">
+            <TabItem Header="初始化">
+              <ListBox Name="InitStepsList" SelectionChanged="StepsList_OnSelectionChanged" DoubleTapped="StepsList_OnDoubleTapped">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding Name}" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </TabItem>
+            <TabItem Header="主流程">
+              <ListBox Name="MainStepsList" SelectionChanged="StepsList_OnSelectionChanged" DoubleTapped="StepsList_OnDoubleTapped">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding Name}" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </TabItem>
+            <TabItem Header="清理">
+              <ListBox Name="CleanupStepsList" SelectionChanged="StepsList_OnSelectionChanged" DoubleTapped="StepsList_OnDoubleTapped">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding Name}" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </TabItem>
+          </TabControl>
+        </Grid>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="2" Grid.ColumnSpan="2" BorderBrush="#D0D7DE" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,10,0,0">
+      <Grid RowDefinitions="Auto,*">
+        <TextBlock Text="执行日志" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <TextBox Grid.Row="1" Name="LogBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

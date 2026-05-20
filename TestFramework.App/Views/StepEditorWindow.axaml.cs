@@ -20,22 +20,6 @@ public sealed partial class StepEditorWindow : Window
     private VariableWriteDefinition? _selectedVariableWrite;
     private bool _updating = true;
 
-    public sealed class ParameterEntry
-    {
-        public required string Key { get; init; }
-
-        public required string ValueText { get; init; }
-    }
-
-    public sealed class VariableWriteEntry
-    {
-        public required VariableWriteDefinition Definition { get; init; }
-
-        public required string Name { get; init; }
-
-        public required string SourceText { get; init; }
-    }
-
     public sealed class ErrorHandlingOption
     {
         public required ErrorHandlingMode Mode { get; init; }
@@ -151,24 +135,10 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        var current = _step.Parameters;
-        var saved = _settingsPlugin.SaveSettings(_settings);
-        var merged = new Dictionary<string, object?>(current, StringComparer.OrdinalIgnoreCase);
-        foreach (var (key, value) in saved)
-        {
-            if (current.TryGetValue(key, out var existing) &&
-                _settingsBaselineParameters.TryGetValue(key, out var baseline) &&
-                ValuesEqual(value, baseline) &&
-                (IsVariableReference(existing) || !ValuesEqual(existing, baseline)))
-            {
-                merged[key] = existing;
-                continue;
-            }
-
-            merged[key] = value;
-        }
-
-        _step.Parameters = merged;
+        _step.Parameters = StepSettingsParameterMerger.Merge(
+            _step.Parameters,
+            _settingsPlugin.SaveSettings(_settings),
+            _settingsBaselineParameters);
         RefreshParameterList();
     }
 
@@ -195,14 +165,9 @@ public sealed partial class StepEditorWindow : Window
         var wasUpdating = _updating;
         _updating = true;
 
-        var entries = _step?.Parameters
-            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(pair => new ParameterEntry
-            {
-                Key = pair.Key,
-                ValueText = FormatValue(pair.Value)
-            })
-            .ToList() ?? [];
+        IReadOnlyList<ParameterEntry> entries = _step is null
+            ? []
+            : StepEditorListModels.CreateParameterEntries(_step.Parameters);
 
         ParametersList.ItemsSource = null;
         ParametersList.ItemsSource = entries;
@@ -227,16 +192,9 @@ public sealed partial class StepEditorWindow : Window
         var wasUpdating = _updating;
         _updating = true;
 
-        var entries = _step?.VariableWrites
-            .Select(write => new VariableWriteEntry
-            {
-                Definition = write,
-                Name = string.IsNullOrWhiteSpace(write.Name) ? "（未命名）" : write.Name,
-                SourceText = string.IsNullOrWhiteSpace(write.OutputKey)
-                    ? $"固定值：{FormatValue(write.Value)}"
-                    : $"输出：{write.OutputKey}"
-            })
-            .ToList() ?? [];
+        IReadOnlyList<VariableWriteEntry> entries = _step is null
+            ? []
+            : StepEditorListModels.CreateVariableWriteEntries(_step.VariableWrites);
 
         VariableWritesList.ItemsSource = null;
         VariableWritesList.ItemsSource = entries;
@@ -251,85 +209,10 @@ public sealed partial class StepEditorWindow : Window
         _selectedVariableWrite = selected?.Definition;
         VariableWriteNameBox.Text = _selectedVariableWrite?.Name ?? string.Empty;
         VariableWriteOutputKeyBox.Text = _selectedVariableWrite?.OutputKey ?? string.Empty;
-        VariableWriteValueBox.Text = FormatValue(_selectedVariableWrite?.Value);
+        VariableWriteValueBox.Text = EditorValueConverter.Format(_selectedVariableWrite?.Value);
         VariableWriteOnErrorBox.IsChecked = _selectedVariableWrite?.WriteOnError ?? false;
 
         _updating = wasUpdating;
-    }
-
-    private static string MakeUniqueName(IEnumerable<string> existingNames, string baseName)
-    {
-        var existing = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
-        if (!existing.Contains(baseName))
-        {
-            return baseName;
-        }
-
-        for (var index = 1; ; index++)
-        {
-            var candidate = $"{baseName}{index}";
-            if (!existing.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-    }
-
-    private static object? ParseEditorValue(string? text)
-    {
-        if (text is null)
-        {
-            return null;
-        }
-
-        var trimmed = text.Trim();
-        if (trimmed.Contains("${", StringComparison.Ordinal))
-        {
-            return text;
-        }
-
-        if (bool.TryParse(trimmed, out var boolean))
-        {
-            return boolean;
-        }
-
-        if (int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer))
-        {
-            return integer;
-        }
-
-        if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
-        {
-            return number;
-        }
-
-        return text;
-    }
-
-    private static string FormatValue(object? value)
-    {
-        return value switch
-        {
-            null => string.Empty,
-            bool boolean => boolean.ToString(CultureInfo.InvariantCulture).ToLowerInvariant(),
-            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
-            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
-        };
-    }
-
-    private static bool IsVariableReference(object? value)
-    {
-        return value is string text && text.Contains("${", StringComparison.Ordinal);
-    }
-
-    private static bool ValuesEqual(object? left, object? right)
-    {
-        if (Equals(left, right))
-        {
-            return true;
-        }
-
-        return string.Equals(FormatValue(left), FormatValue(right), StringComparison.Ordinal);
     }
 
     private void StepNameBox_OnTextChanged(object? sender, TextChangedEventArgs e)
@@ -399,7 +282,7 @@ public sealed partial class StepEditorWindow : Window
         ParameterValueBox.Text = _step is not null &&
                                  _selectedParameterKey is not null &&
                                  _step.Parameters.TryGetValue(_selectedParameterKey, out var value)
-            ? FormatValue(value)
+            ? EditorValueConverter.Format(value)
             : string.Empty;
         _updating = wasUpdating;
     }
@@ -438,7 +321,7 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        _step.Parameters[_selectedParameterKey] = ParseEditorValue(ParameterValueBox.Text);
+        _step.Parameters[_selectedParameterKey] = EditorValueConverter.Parse(ParameterValueBox.Text);
     }
 
     private void AddParameter_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -448,7 +331,7 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        var key = MakeUniqueName(_step.Parameters.Keys, "parameter");
+        var key = UniqueNameGenerator.Create(_step.Parameters.Keys, "parameter");
         _step.Parameters[key] = string.Empty;
         _selectedParameterKey = key;
         RefreshParameterList();
@@ -478,7 +361,7 @@ public sealed partial class StepEditorWindow : Window
         _updating = true;
         VariableWriteNameBox.Text = _selectedVariableWrite?.Name ?? string.Empty;
         VariableWriteOutputKeyBox.Text = _selectedVariableWrite?.OutputKey ?? string.Empty;
-        VariableWriteValueBox.Text = FormatValue(_selectedVariableWrite?.Value);
+        VariableWriteValueBox.Text = EditorValueConverter.Format(_selectedVariableWrite?.Value);
         VariableWriteOnErrorBox.IsChecked = _selectedVariableWrite?.WriteOnError ?? false;
         _updating = wasUpdating;
     }
@@ -513,7 +396,7 @@ public sealed partial class StepEditorWindow : Window
         }
 
         _selectedVariableWrite.Value = string.IsNullOrWhiteSpace(_selectedVariableWrite.OutputKey)
-            ? ParseEditorValue(VariableWriteValueBox.Text)
+            ? EditorValueConverter.Parse(VariableWriteValueBox.Text)
             : null;
     }
 
@@ -536,7 +419,7 @@ public sealed partial class StepEditorWindow : Window
 
         var write = new VariableWriteDefinition
         {
-            Name = MakeUniqueName(_step.VariableWrites.Select(item => item.Name), "result"),
+            Name = UniqueNameGenerator.Create(_step.VariableWrites.Select(item => item.Name), "result"),
             OutputKey = "value"
         };
         _step.VariableWrites.Add(write);

@@ -85,6 +85,49 @@ public sealed class TestSequenceValidatorTests
     }
 
     [Fact]
+    public void Validate_ReportsDuplicatedStepIdAcrossSections()
+    {
+        var sequence = new TestSequence
+        {
+            Name = "Sequence",
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    InitSteps =
+                    [
+                        new TestStepDefinition
+                        {
+                            Id = "shared",
+                            Name = "Init",
+                            PluginId = "demo.step",
+                            PluginVersion = "1.0.0"
+                        }
+                    ],
+                    MainSteps =
+                    [
+                        new TestStepDefinition
+                        {
+                            Id = "shared",
+                            Name = "Main",
+                            PluginId = "demo.step",
+                            PluginVersion = "1.0.0"
+                        }
+                    ],
+                    VerdictSource = new VerdictSource { StepId = "shared" }
+                }
+            ]
+        };
+
+        var issues = new TestSequenceValidator().Validate(sequence);
+
+        Assert.Contains(issues, issue =>
+            issue.Path == "items[0].main[0].id" &&
+            issue.Message.Contains("duplicated", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Validate_AllowsStandaloneTransportAndService()
     {
         var sequence = new TestSequence

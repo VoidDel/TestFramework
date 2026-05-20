@@ -1,6 +1,11 @@
 namespace TestFramework.Abstractions.Resources;
 
-public sealed class RuntimeResourceProvider : IInstrumentProvider, ITransportProvider, ITestServiceProvider
+public sealed class RuntimeResourceProvider :
+    IInstrumentProvider,
+    ITransportProvider,
+    ITestServiceProvider,
+    IDisposable,
+    IAsyncDisposable
 {
     public static RuntimeResourceProvider Empty { get; } = new(isReadOnly: true);
 
@@ -8,6 +13,7 @@ public sealed class RuntimeResourceProvider : IInstrumentProvider, ITransportPro
     private readonly Dictionary<string, object> _instruments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, object> _transports = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, object> _services = new(StringComparer.OrdinalIgnoreCase);
+    private bool _disposed;
 
     public RuntimeResourceProvider()
     {
@@ -77,6 +83,7 @@ public sealed class RuntimeResourceProvider : IInstrumentProvider, ITransportPro
             throw new InvalidOperationException("The shared empty runtime resource provider cannot be modified.");
         }
 
+        ObjectDisposedException.ThrowIf(_disposed, this);
         Register((IDictionary<string, object>)target, id, value);
     }
 
@@ -102,5 +109,69 @@ public sealed class RuntimeResourceProvider : IInstrumentProvider, ITransportPro
 
         value = typed;
         return true;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        foreach (var resource in GetDisposableResources())
+        {
+            if (resource is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        foreach (var resource in GetDisposableResources())
+        {
+            if (resource is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            }
+            else if (resource is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+    }
+
+    private IReadOnlyList<object> GetDisposableResources()
+    {
+        var resources = new List<object>();
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        AddResources(_services.Values, resources, seen);
+        AddResources(_transports.Values, resources, seen);
+        AddResources(_instruments.Values, resources, seen);
+
+        return resources;
+    }
+
+    private static void AddResources(
+        IEnumerable<object> source,
+        ICollection<object> target,
+        ISet<object> seen)
+    {
+        foreach (var resource in source)
+        {
+            if (seen.Add(resource))
+            {
+                target.Add(resource);
+            }
+        }
     }
 }

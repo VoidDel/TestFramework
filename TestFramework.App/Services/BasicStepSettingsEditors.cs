@@ -169,11 +169,11 @@ public static class BasicStepSettingsEditors
             var raw = bindingContext.GetParameterValue(parameterKey);
             if (raw is not null)
             {
-                return FormatValue(raw);
+                return EditorValueConverter.Format(raw);
             }
         }
 
-        return FormatValue(value);
+        return EditorValueConverter.Format(value);
     }
 
     private static void SetRawParameter(ISettingsEditContext context, string parameterKey, object? value)
@@ -189,14 +189,4 @@ public static class BasicStepSettingsEditors
         return text.Contains("${", StringComparison.Ordinal);
     }
 
-    private static string FormatValue(object? value)
-    {
-        return value switch
-        {
-            null => string.Empty,
-            bool boolean => boolean.ToString(CultureInfo.InvariantCulture).ToLowerInvariant(),
-            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
-            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
-        };
-    }
 }

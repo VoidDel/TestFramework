@@ -1,9 +1,7 @@
-using System.Globalization;
 using Avalonia.Controls;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.App.Services;
-using TestFramework.Core.Execution;
 using TestFramework.Core.Plugins;
 using TestFramework.Core.Resources;
 using TestFramework.Plugin.Abstractions.UI;
@@ -19,6 +17,8 @@ public sealed partial class SequenceEditorView : UserControl
     private readonly ResourcePluginRegistry _resourcePluginRegistry = new();
     private readonly PluginSettingsEditorRegistry _settingsEditorRegistry = new();
     private readonly TestSequenceYamlService _yamlService = new();
+    private readonly SequenceDocumentStore _documentStore;
+    private readonly SequenceRunService _runService;
     private readonly TestSequenceValidator _validator;
 
     private TestSequence _sequence = new();
@@ -60,15 +60,6 @@ public sealed partial class SequenceEditorView : UserControl
         public required string ValueText { get; init; }
     }
 
-    public sealed class SequenceDocument
-    {
-        public required TestSequence Sequence { get; init; }
-
-        public string? FilePath { get; set; }
-
-        public string Name => Sequence.Name;
-    }
-
     public sealed class Option<T>
     {
         public required T Value { get; init; }
@@ -84,6 +75,8 @@ public sealed partial class SequenceEditorView : UserControl
 
         RegisterPlugins();
         RegisterSettingsEditors();
+        _documentStore = new SequenceDocumentStore(_yamlService, SequenceDirectory, CreateDefaultSequence);
+        _runService = new SequenceRunService(_pluginRegistry, _resourcePluginRegistry);
         _validator = new TestSequenceValidator(_pluginRegistry);
 
         PluginCombo.ItemsSource = _pluginRegistry.Plugins;
@@ -204,47 +197,22 @@ public sealed partial class SequenceEditorView : UserControl
 
     private void LoadSequenceDocuments()
     {
-        Directory.CreateDirectory(SequenceDirectory);
+        var loadResult = _documentStore.Load();
+
         _sequenceDocuments.Clear();
+        _sequenceDocuments.AddRange(loadResult.Documents);
 
-        foreach (var file in Directory.EnumerateFiles(SequenceDirectory, "*.yml")
-                     .Concat(Directory.EnumerateFiles(SequenceDirectory, "*.yaml"))
-                     .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+        foreach (var failure in loadResult.Failures)
         {
-            try
-            {
-                var sequence = _yamlService.LoadFromFile(file);
-                _sequenceDocuments.Add(new SequenceDocument
-                {
-                    Sequence = sequence,
-                    FilePath = file
-                });
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"序列加载失败：{file} - {ex.Message}");
-            }
+            AppendLog($"序列加载失败：{failure.FilePath} - {failure.Message}");
         }
 
-        if (_sequenceDocuments.Count == 0)
-        {
-            _currentDocument = CreateNewSequenceDocument();
-            _sequenceDocuments.Add(_currentDocument);
-        }
-        else
-        {
-            _currentDocument = _sequenceDocuments[0];
-        }
-
-        SetCurrentDocument(_currentDocument);
+        SetCurrentDocument(loadResult.CurrentDocument);
     }
 
     private SequenceDocument CreateNewSequenceDocument()
     {
-        return new SequenceDocument
-        {
-            Sequence = CreateDefaultSequence()
-        };
+        return _documentStore.CreateNew();
     }
 
     private void SetCurrentDocument(SequenceDocument document)
@@ -325,8 +293,8 @@ public sealed partial class SequenceEditorView : UserControl
             string.Equals(step.Id, _selectedItem.VerdictSource.StepId, StringComparison.OrdinalIgnoreCase));
         VerdictOutputBox.Text = _selectedItem.VerdictSource.OutputKey ?? string.Empty;
         SelectOption(VerdictTypeCombo, _selectedItem.VerdictSource.JudgeType);
-        NumericLowerBox.Text = FormatNullableDouble(_selectedItem.VerdictSource.LowerLimit);
-        NumericUpperBox.Text = FormatNullableDouble(_selectedItem.VerdictSource.UpperLimit);
+        NumericLowerBox.Text = EditorValueConverter.FormatNullableDouble(_selectedItem.VerdictSource.LowerLimit);
+        NumericUpperBox.Text = EditorValueConverter.FormatNullableDouble(_selectedItem.VerdictSource.UpperLimit);
         NumericSourceUnitBox.Text = _selectedItem.VerdictSource.SourceUnit ?? string.Empty;
         NumericUnitBox.Text = _selectedItem.VerdictSource.Unit ?? string.Empty;
         SelectOption(StringModeCombo, _selectedItem.VerdictSource.StringMode);
@@ -434,19 +402,8 @@ public sealed partial class SequenceEditorView : UserControl
         TreeSelectionText.Text = _selectedItem is null
             ? "在左侧树中选择测试项或 Step。"
             : _selectedStep is null
-                ? $"当前测试项：{_selectedItem.Name}，添加 Step 将进入“{FormatSection(_selectedSection)}”。"
-                : $"当前 Step：{_selectedStep.Name}（{FormatSection(_selectedSection)}）。";
-    }
-
-    private static string FormatSection(StepSection section)
-    {
-        return section switch
-        {
-            StepSection.Init => "初始化",
-            StepSection.Main => "主流程",
-            StepSection.Cleanup => "清理",
-            _ => section.ToString()
-        };
+                ? $"当前测试项：{_selectedItem.Name}，添加 Step 将进入“{DisplayFormatters.FormatSection(_selectedSection)}”。"
+                : $"当前 Step：{_selectedStep.Name}（{DisplayFormatters.FormatSection(_selectedSection)}）。";
     }
 
     private void RefreshVariablesList()
@@ -459,7 +416,7 @@ public sealed partial class SequenceEditorView : UserControl
             .Select(pair => new VariableEntry
             {
                 Name = pair.Key,
-                ValueText = FormatValue(pair.Value)
+                ValueText = EditorValueConverter.Format(pair.Value)
             })
             .ToList();
         VariablesList.ItemsSource = null;
@@ -480,78 +437,6 @@ public sealed partial class SequenceEditorView : UserControl
         _updating = wasUpdating;
     }
 
-    private static string MakeUniqueName(IEnumerable<string> existingNames, string baseName)
-    {
-        var existing = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
-        if (!existing.Contains(baseName))
-        {
-            return baseName;
-        }
-
-        for (var index = 1; ; index++)
-        {
-            var candidate = $"{baseName}{index}";
-            if (!existing.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-    }
-
-    private static object? ParseEditorValue(string? text)
-    {
-        if (text is null)
-        {
-            return null;
-        }
-
-        var trimmed = text.Trim();
-        if (trimmed.Contains("${", StringComparison.Ordinal))
-        {
-            return text;
-        }
-
-        if (bool.TryParse(trimmed, out var boolean))
-        {
-            return boolean;
-        }
-
-        if (int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer))
-        {
-            return integer;
-        }
-
-        if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
-        {
-            return number;
-        }
-
-        return text;
-    }
-
-    private static string FormatValue(object? value)
-    {
-        return value switch
-        {
-            null => string.Empty,
-            bool boolean => boolean.ToString(CultureInfo.InvariantCulture).ToLowerInvariant(),
-            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
-            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
-        };
-    }
-
-    private static string FormatNullableDouble(double? value)
-    {
-        return value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-    }
-
-    private static double? ParseNullableDouble(string? text)
-    {
-        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
-            ? value
-            : null;
-    }
-
     private static string? EmptyToNull(string? text)
     {
         return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
@@ -567,20 +452,6 @@ public sealed partial class SequenceEditorView : UserControl
     private static T? SelectedOptionValue<T>(ComboBox comboBox)
     {
         return comboBox.SelectedItem is Option<T> option ? option.Value : default;
-    }
-
-    private static string FormatVerdict(TestVerdict verdict)
-    {
-        return verdict switch
-        {
-            TestVerdict.None => "未运行",
-            TestVerdict.Pass => "通过",
-            TestVerdict.Fail => "失败",
-            TestVerdict.Error => "错误",
-            TestVerdict.Skipped => "跳过",
-            TestVerdict.Inconclusive => "无结论",
-            _ => verdict.ToString()
-        };
     }
 
     private void AppendLog(string message)
@@ -608,43 +479,15 @@ public sealed partial class SequenceEditorView : UserControl
         return false;
     }
 
-    private string EnsureCurrentSequenceFilePath()
+    private SequenceDocument EnsureCurrentDocument()
     {
-        Directory.CreateDirectory(SequenceDirectory);
         _currentDocument ??= CreateNewSequenceDocument();
         if (!_sequenceDocuments.Contains(_currentDocument))
         {
             _sequenceDocuments.Add(_currentDocument);
         }
 
-        _currentDocument.FilePath ??= GetUniqueSequenceFilePath(_sequence.Name);
-        return _currentDocument.FilePath;
-    }
-
-    private string GetUniqueSequenceFilePath(string sequenceName)
-    {
-        Directory.CreateDirectory(SequenceDirectory);
-        var baseName = SanitizeFileName(string.IsNullOrWhiteSpace(sequenceName) ? "sequence" : sequenceName);
-        var candidate = Path.Combine(SequenceDirectory, $"{baseName}.yaml");
-        for (var index = 1; File.Exists(candidate); index++)
-        {
-            candidate = Path.Combine(SequenceDirectory, $"{baseName}{index}.yaml");
-        }
-
-        return candidate;
-    }
-
-    private string MakeUniqueSequenceName(string name)
-    {
-        var baseName = string.IsNullOrWhiteSpace(name) ? "测试序列" : $"{name} 副本";
-        return MakeUniqueName(_sequenceDocuments.Select(document => document.Sequence.Name), baseName);
-    }
-
-    private static string SanitizeFileName(string fileName)
-    {
-        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
-        var sanitized = new string(fileName.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
-        return string.IsNullOrWhiteSpace(sanitized) ? "sequence" : sanitized;
+        return _currentDocument;
     }
 
     private void New_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -663,8 +506,7 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        var file = EnsureCurrentSequenceFilePath();
-        await _yamlService.SaveToFileAsync(_sequence, file);
+        var file = await _documentStore.SaveAsync(EnsureCurrentDocument());
         RefreshSequenceCombo();
         AppendLog($"已保存：{file}");
     }
@@ -681,21 +523,11 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        var yaml = _yamlService.Save(_sequence);
-        var copy = _yamlService.Load(yaml);
-        copy.Name = MakeUniqueSequenceName(copy.Name);
-        var file = GetUniqueSequenceFilePath(copy.Name);
-        await _yamlService.SaveToFileAsync(copy, file);
-
-        var document = new SequenceDocument
-        {
-            Sequence = copy,
-            FilePath = file
-        };
+        var document = await _documentStore.SaveCopyAsync(EnsureCurrentDocument(), _sequenceDocuments);
         _sequenceDocuments.Add(document);
         SetCurrentDocument(document);
         RefreshAll();
-        AppendLog($"已保存：{file}");
+        AppendLog($"已保存：{document.FilePath}");
     }
 
     private void DeleteSequence_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -706,9 +538,8 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         var removed = _currentDocument;
-        if (!string.IsNullOrWhiteSpace(removed.FilePath) && File.Exists(removed.FilePath))
+        if (_documentStore.DeleteFile(removed))
         {
-            File.Delete(removed.FilePath);
             AppendLog($"已删除测试序列文件：{removed.FilePath}");
         }
 
@@ -732,10 +563,8 @@ public sealed partial class SequenceEditorView : UserControl
         LogBox.Text = string.Empty;
         try
         {
-            var resources = await new RuntimeResourceBuilder(_resourcePluginRegistry).BuildAsync(_sequence);
-            var runner = new TestSequenceRunner(_pluginRegistry, new UiExecutionObserver(AppendLog), resources);
-            var result = await runner.RunAsync(_sequence);
-            StatusText.Text = $"运行完成：{FormatVerdict(result.Verdict)}";
+            var result = await _runService.RunAsync(_sequence, new UiExecutionObserver(AppendLog));
+            StatusText.Text = $"运行完成：{DisplayFormatters.FormatVerdict(result.Verdict)}";
         }
         catch (OperationCanceledException)
         {
@@ -792,7 +621,7 @@ public sealed partial class SequenceEditorView : UserControl
         VariableNameBox.Text = _selectedVariableName ?? string.Empty;
         VariableValueBox.Text = _selectedVariableName is not null &&
                                 _sequence.Variables.TryGetValue(_selectedVariableName, out var value)
-            ? FormatValue(value)
+            ? EditorValueConverter.Format(value)
             : string.Empty;
         _updating = wasUpdating;
     }
@@ -832,12 +661,12 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        _sequence.Variables[_selectedVariableName] = ParseEditorValue(VariableValueBox.Text);
+        _sequence.Variables[_selectedVariableName] = EditorValueConverter.Parse(VariableValueBox.Text);
     }
 
     private void AddVariable_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        var name = MakeUniqueName(_sequence.Variables.Keys, "variable");
+        var name = UniqueNameGenerator.Create(_sequence.Variables.Keys, "variable");
         _sequence.Variables[name] = string.Empty;
         _selectedVariableName = name;
         RefreshVariablesList();
@@ -1132,7 +961,7 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            _selectedItem.VerdictSource.LowerLimit = ParseNullableDouble(NumericLowerBox.Text);
+            _selectedItem.VerdictSource.LowerLimit = EditorValueConverter.ParseNullableDouble(NumericLowerBox.Text);
         }
     }
 
@@ -1140,7 +969,7 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            _selectedItem.VerdictSource.UpperLimit = ParseNullableDouble(NumericUpperBox.Text);
+            _selectedItem.VerdictSource.UpperLimit = EditorValueConverter.ParseNullableDouble(NumericUpperBox.Text);
         }
     }
 

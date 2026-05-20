@@ -4,6 +4,7 @@ using TestFramework.Abstractions.Plugins;
 using TestFramework.Abstractions.Resources;
 using TestFramework.Core.Execution;
 using TestFramework.Core.Plugins;
+using TestFramework.Core.Resources;
 using Xunit;
 
 namespace TestFramework.Tests;
@@ -49,6 +50,41 @@ public sealed class RuntimeResourceTests
         Assert.Equal("VIN123", step.Outputs["vin"]);
     }
 
+    [Fact]
+    public async Task BuildAsync_DisposesCreatedResourcesWhenLaterResourceFails()
+    {
+        var disposable = new DisposableResource();
+        var registry = new ResourcePluginRegistry();
+        registry.RegisterInstrumentDriver(new DisposableInstrumentPlugin(disposable));
+
+        var sequence = new TestSequence
+        {
+            Instruments =
+            [
+                new InstrumentDefinition
+                {
+                    Id = "psu",
+                    DriverId = "fake.instrument",
+                    DriverVersion = "1.0.0"
+                }
+            ],
+            Transports =
+            [
+                new TransportDefinition
+                {
+                    Id = "can",
+                    TransportId = "missing.transport",
+                    TransportVersion = "1.0.0"
+                }
+            ]
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new RuntimeResourceBuilder(registry).BuildAsync(sequence));
+
+        Assert.Equal(1, disposable.DisposeAsyncCount);
+    }
+
     private interface IFakeUdsClient
     {
         string ReadVin();
@@ -64,6 +100,44 @@ public sealed class RuntimeResourceTests
         }
 
         public string ReadVin() => _vin;
+    }
+
+    private sealed class DisposableResource : IAsyncDisposable
+    {
+        public int DisposeAsyncCount { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeAsyncCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class DisposableInstrumentPlugin : IInstrumentDriverPlugin
+    {
+        private readonly DisposableResource _resource;
+
+        public DisposableInstrumentPlugin(DisposableResource resource)
+        {
+            _resource = resource;
+        }
+
+        public ResourcePluginDescriptor Descriptor { get; } = new()
+        {
+            PluginId = "fake.instrument",
+            DisplayName = "Fake Instrument",
+            Version = new Version(1, 0, 0)
+        };
+
+        public Type InstrumentType => typeof(DisposableResource);
+
+        public Task<object> CreateAsync(
+            InstrumentDefinition definition,
+            RuntimeResourceProvider resources,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult<object>(_resource);
+        }
     }
 
     private sealed class ServiceUsingStepPlugin : ITestStepPlugin

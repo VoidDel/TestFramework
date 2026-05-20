@@ -20,28 +20,36 @@ public sealed class RuntimeResourceBuilder
 
         var resources = new RuntimeResourceProvider();
 
-        foreach (var definition in sequence.Instruments)
+        try
         {
-            var plugin = _plugins.GetRequiredInstrumentDriver(definition.DriverId, definition.DriverVersion);
-            resources.RegisterInstrument(
-                definition.Id,
-                await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
-        }
+            foreach (var definition in sequence.Instruments)
+            {
+                var plugin = _plugins.GetRequiredInstrumentDriver(definition.DriverId, definition.DriverVersion);
+                resources.RegisterInstrument(
+                    definition.Id,
+                    await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
+            }
 
-        foreach (var definition in sequence.Transports)
-        {
-            var plugin = _plugins.GetRequiredTransport(definition.TransportId, definition.TransportVersion);
-            resources.RegisterTransport(
-                definition.Id,
-                await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
-        }
+            foreach (var definition in sequence.Transports)
+            {
+                var plugin = _plugins.GetRequiredTransport(definition.TransportId, definition.TransportVersion);
+                resources.RegisterTransport(
+                    definition.Id,
+                    await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
+            }
 
-        foreach (var definition in sequence.Services)
+            foreach (var definition in sequence.Services)
+            {
+                var plugin = _plugins.GetRequiredService(definition.ServiceId, definition.ServiceVersion);
+                resources.RegisterService(
+                    definition.Id,
+                    await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
+            }
+        }
+        catch
         {
-            var plugin = _plugins.GetRequiredService(definition.ServiceId, definition.ServiceVersion);
-            resources.RegisterService(
-                definition.Id,
-                await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
+            await resources.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
 
         return resources;

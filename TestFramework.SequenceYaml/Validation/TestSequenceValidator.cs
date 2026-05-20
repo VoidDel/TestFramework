@@ -59,9 +59,11 @@ public sealed class TestSequenceValidator
             }
 
             ValidateVerdictSource(item.VerdictSource, $"{itemPath}.verdictSource", issues);
-            ValidateSteps(item.InitSteps, $"{itemPath}.init", issues);
-            ValidateSteps(item.MainSteps, $"{itemPath}.main", issues);
-            ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", issues);
+
+            var stepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, issues);
+            ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, issues);
+            ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, issues);
         }
     }
 
@@ -182,9 +184,12 @@ public sealed class TestSequenceValidator
         }
     }
 
-    private void ValidateSteps(IReadOnlyList<TestStepDefinition> steps, string path, ICollection<ValidationIssue> issues)
+    private void ValidateSteps(
+        IReadOnlyList<TestStepDefinition> steps,
+        string path,
+        ISet<string> stepIds,
+        ICollection<ValidationIssue> issues)
     {
-        var stepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
         {
             var step = steps[stepIndex];

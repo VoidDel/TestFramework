@@ -9,7 +9,10 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -19,12 +22,32 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: |
+            Directory.Packages.props
+            global.json
+            **/*.csproj
 
       - name: Restore
         run: dotnet restore TestFramework.sln
 
-      - name: Build
+      - name: Build libraries
+        if: runner.os != 'Windows'
+        run: >-
+          dotnet build TestFramework.Abstractions/TestFramework.Abstractions.csproj --configuration Release --no-restore &&
+          dotnet build TestFramework.Core/TestFramework.Core.csproj --configuration Release --no-restore &&
+          dotnet build TestFramework.SequenceYaml/TestFramework.SequenceYaml.csproj --configuration Release --no-restore &&
+          dotnet build TestFramework.Plugins.BasicSteps/TestFramework.Plugins.BasicSteps.csproj --configuration Release --no-restore &&
+          dotnet build TestFramework.Tests/TestFramework.Tests.csproj --configuration Release --no-restore
+
+      - name: Build solution
+        if: runner.os == 'Windows'
         run: dotnet build TestFramework.sln --configuration Release --no-restore
 
-      - name: Test
+      - name: Test core
+        if: runner.os != 'Windows'
+        run: dotnet test TestFramework.Tests/TestFramework.Tests.csproj --configuration Release --no-build
+
+      - name: Test solution
+        if: runner.os == 'Windows'
         run: dotnet test TestFramework.sln --configuration Release --no-build

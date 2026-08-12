@@ -1,5 +1,6 @@
 using TestFramework.Abstractions.Models;
 using TestFramework.SequenceYaml;
+using System.Security.Cryptography;
 
 namespace TestFramework.App.Services;
 
@@ -8,6 +9,10 @@ public sealed class SequenceDocument
     public required TestSequence Sequence { get; init; }
 
     public string? FilePath { get; set; }
+
+    public DateTimeOffset? LastKnownWriteTimeUtc { get; set; }
+
+    public string? LastKnownContentHash { get; set; }
 
     public string Name => Sequence.Name;
 }
@@ -59,7 +64,9 @@ public sealed class SequenceDocumentStore
                 documents.Add(new SequenceDocument
                 {
                     Sequence = _yamlService.LoadFromFile(file),
-                    FilePath = file
+                    FilePath = file,
+                    LastKnownWriteTimeUtc = File.GetLastWriteTimeUtc(file),
+                    LastKnownContentHash = ComputeContentHash(file)
                 });
             }
             catch (Exception ex)
@@ -95,8 +102,17 @@ public sealed class SequenceDocumentStore
 
     public async Task<string> SaveAsync(SequenceDocument document, CancellationToken cancellationToken = default)
     {
-        document.FilePath ??= GetUniqueSequenceFilePath(document.Sequence.Name);
-        await _yamlService.SaveToFileAsync(document.Sequence, document.FilePath, cancellationToken).ConfigureAwait(false);
+        var isNewFile = string.IsNullOrWhiteSpace(document.FilePath);
+        var filePath = document.FilePath ?? GetUniqueSequenceFilePath(document.Sequence.Name);
+        if (!isNewFile)
+        {
+            EnsureFileWasNotModifiedExternally(document, filePath);
+        }
+
+        await _yamlService.SaveToFileAsync(document.Sequence, filePath, cancellationToken).ConfigureAwait(false);
+        document.FilePath = filePath;
+        document.LastKnownWriteTimeUtc = File.GetLastWriteTimeUtc(filePath);
+        document.LastKnownContentHash = ComputeContentHash(filePath);
         return document.FilePath;
     }
 
@@ -116,6 +132,8 @@ public sealed class SequenceDocumentStore
         };
 
         await _yamlService.SaveToFileAsync(copy, document.FilePath, cancellationToken).ConfigureAwait(false);
+        document.LastKnownWriteTimeUtc = File.GetLastWriteTimeUtc(document.FilePath);
+        document.LastKnownContentHash = ComputeContentHash(document.FilePath);
         return document;
     }
 
@@ -126,8 +144,33 @@ public sealed class SequenceDocumentStore
             return false;
         }
 
+        EnsureFileWasNotModifiedExternally(document, document.FilePath);
         File.Delete(document.FilePath);
+        document.LastKnownWriteTimeUtc = null;
+        document.LastKnownContentHash = null;
         return true;
+    }
+
+    private static void EnsureFileWasNotModifiedExternally(SequenceDocument document, string filePath)
+    {
+        if (!File.Exists(filePath))
+        {
+            throw new IOException($"Sequence file '{filePath}' was removed outside the application.");
+        }
+
+        var actualWriteTime = File.GetLastWriteTimeUtc(filePath);
+        var actualHash = ComputeContentHash(filePath);
+        if ((document.LastKnownWriteTimeUtc.HasValue && actualWriteTime != document.LastKnownWriteTimeUtc.Value.UtcDateTime) ||
+            (document.LastKnownContentHash is not null && !string.Equals(actualHash, document.LastKnownContentHash, StringComparison.Ordinal)))
+        {
+            throw new IOException($"Sequence file '{filePath}' was modified outside the application. Reload it before saving.");
+        }
+    }
+
+    private static string ComputeContentHash(string filePath)
+    {
+        using var stream = File.OpenRead(filePath);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     private IEnumerable<string> EnumerateSequenceFiles()

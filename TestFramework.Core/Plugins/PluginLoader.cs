@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.Loader;
 using TestFramework.Abstractions.Plugins;
 
 namespace TestFramework.Core.Plugins;
@@ -69,8 +68,22 @@ public sealed class PluginLoader
 
     public IReadOnlyList<ITestStepPlugin> LoadFromAssembly(string assemblyPath)
     {
-        var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(assemblyPath));
-        return CreatePlugins(assembly);
+        var handle = PluginAssemblyCatalog.Load(assemblyPath);
+        try
+        {
+            var plugins = CreatePlugins(handle.Assembly);
+            if (plugins.Count == 0)
+            {
+                PluginAssemblyCatalog.ReleaseIfUnused(handle);
+            }
+
+            return plugins;
+        }
+        catch
+        {
+            PluginAssemblyCatalog.ReleaseIfUnused(handle);
+            throw;
+        }
     }
 
     public IReadOnlyList<ITestStepPlugin> LoadFromAssembly(Assembly assembly)

@@ -84,6 +84,20 @@ public sealed class TestSequenceValidator
 
         if (source.JudgeType == VerdictJudgeType.Numeric &&
             source.LowerLimit.HasValue &&
+            !double.IsFinite(source.LowerLimit.Value))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.lowerLimit", Message = "Numeric lowerLimit must be finite." });
+        }
+
+        if (source.JudgeType == VerdictJudgeType.Numeric &&
+            source.UpperLimit.HasValue &&
+            !double.IsFinite(source.UpperLimit.Value))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.upperLimit", Message = "Numeric upperLimit must be finite." });
+        }
+
+        if (source.JudgeType == VerdictJudgeType.Numeric &&
+            source.LowerLimit.HasValue &&
             source.UpperLimit.HasValue &&
             source.LowerLimit.Value > source.UpperLimit.Value)
         {

@@ -42,6 +42,24 @@ internal static class EditorValueConverter
             : null;
     }
 
+    public static bool TryParseNullableDouble(string? text, out double? value)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            value = null;
+            return true;
+        }
+
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) && double.IsFinite(parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
     public static string Format(object? value)
     {
         return value switch

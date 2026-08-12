@@ -19,6 +19,7 @@ public sealed partial class SequenceEditorView : UserControl
     private readonly TestSequenceYamlService _yamlService = new();
     private readonly SequenceDocumentStore _documentStore;
     private readonly SequenceRunService _runService;
+    private readonly TestResultStore _resultStore;
     private readonly TestSequenceValidator _validator;
 
     private TestSequence _sequence = new();
@@ -29,6 +30,9 @@ public sealed partial class SequenceEditorView : UserControl
     private StepSection _selectedSection = StepSection.Init;
     private string? _selectedVariableName;
     private bool _updating = true;
+    private bool _isRunning;
+    private bool _numericLowerInputValid = true;
+    private bool _numericUpperInputValid = true;
 
     public enum TreeNodeKind
     {
@@ -70,13 +74,19 @@ public sealed partial class SequenceEditorView : UserControl
     }
 
     public SequenceEditorView()
+        : this(SequenceDirectory, ResultDirectory)
+    {
+    }
+
+    internal SequenceEditorView(string sequenceDirectory, string resultDirectory)
     {
         InitializeComponent();
 
         RegisterPlugins();
         RegisterSettingsEditors();
-        _documentStore = new SequenceDocumentStore(_yamlService, SequenceDirectory, CreateDefaultSequence);
+        _documentStore = new SequenceDocumentStore(_yamlService, sequenceDirectory, CreateDefaultSequence);
         _runService = new SequenceRunService(_pluginRegistry, _resourcePluginRegistry);
+        _resultStore = new TestResultStore(resultDirectory);
         _validator = new TestSequenceValidator(_pluginRegistry);
 
         PluginCombo.ItemsSource = _pluginRegistry.Plugins;
@@ -195,6 +205,9 @@ public sealed partial class SequenceEditorView : UserControl
     private static string SequenceDirectory =>
         Path.Combine(AppContext.BaseDirectory, "config", "sequence");
 
+    private static string ResultDirectory =>
+        Path.Combine(AppContext.BaseDirectory, "results");
+
     private void LoadSequenceDocuments()
     {
         var loadResult = _documentStore.Load();
@@ -270,6 +283,13 @@ public sealed partial class SequenceEditorView : UserControl
 
     private void RefreshVerdictControls()
     {
+        var wasUpdating = _updating;
+        _updating = true;
+        _numericLowerInputValid = true;
+        _numericUpperInputValid = true;
+        NumericLowerBox.SetValue(DataValidationErrors.ErrorsProperty, null);
+        NumericUpperBox.SetValue(DataValidationErrors.ErrorsProperty, null);
+
         VerdictStepCombo.ItemsSource = null;
         VerdictStepCombo.ItemsSource = _selectedItem?.MainSteps;
 
@@ -286,6 +306,7 @@ public sealed partial class SequenceEditorView : UserControl
             ExpectedStringBox.Text = string.Empty;
             NumericJudgePanel.IsVisible = false;
             StringJudgePanel.IsVisible = false;
+            _updating = wasUpdating;
             return;
         }
 
@@ -301,6 +322,7 @@ public sealed partial class SequenceEditorView : UserControl
         ExpectedStringBox.Text = _selectedItem.VerdictSource.ExpectedString ?? string.Empty;
         NumericJudgePanel.IsVisible = _selectedItem.VerdictSource.JudgeType == VerdictJudgeType.Numeric;
         StringJudgePanel.IsVisible = _selectedItem.VerdictSource.JudgeType == VerdictJudgeType.String;
+        _updating = wasUpdating;
     }
 
     private SequenceTreeNode BuildSequenceTree()
@@ -462,6 +484,14 @@ public sealed partial class SequenceEditorView : UserControl
 
     private bool ValidateForSaveOrRun()
     {
+        if (_selectedItem?.VerdictSource.JudgeType == VerdictJudgeType.Numeric &&
+            (!_numericLowerInputValid || !_numericUpperInputValid))
+        {
+            StatusText.Text = "数值限值格式无效。";
+            AppendLog("校验失败：数值限值必须使用小数点格式，例如 4.8。");
+            return false;
+        }
+
         var issues = _validator.Validate(_sequence);
         if (issues.Count == 0)
         {
@@ -506,14 +536,28 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        var file = await _documentStore.SaveAsync(EnsureCurrentDocument());
-        RefreshSequenceCombo();
-        AppendLog($"已保存：{file}");
+        try
+        {
+            var file = await _documentStore.SaveAsync(EnsureCurrentDocument());
+            RefreshSequenceCombo();
+            AppendLog($"已保存：{file}");
+        }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("保存失败", ex);
+        }
     }
 
     private async void SaveAs_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await SaveAsAsync();
+        try
+        {
+            await SaveAsAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("另存失败", ex);
+        }
     }
 
     private async Task SaveAsAsync()
@@ -537,34 +581,45 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        var removed = _currentDocument;
-        if (_documentStore.DeleteFile(removed))
+        try
         {
-            AppendLog($"已删除测试序列文件：{removed.FilePath}");
-        }
+            var removed = _currentDocument;
+            if (_documentStore.DeleteFile(removed))
+            {
+                AppendLog($"已删除测试序列文件：{removed.FilePath}");
+            }
 
-        _sequenceDocuments.Remove(removed);
-        if (_sequenceDocuments.Count == 0)
+            _sequenceDocuments.Remove(removed);
+            if (_sequenceDocuments.Count == 0)
+            {
+                _sequenceDocuments.Add(CreateNewSequenceDocument());
+            }
+
+            SetCurrentDocument(_sequenceDocuments[0]);
+            RefreshAll();
+        }
+        catch (Exception ex)
         {
-            _sequenceDocuments.Add(CreateNewSequenceDocument());
+            ReportOperationFailure("删除失败", ex);
         }
-
-        SetCurrentDocument(_sequenceDocuments[0]);
-        RefreshAll();
     }
 
     private async void Run_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (!ValidateForSaveOrRun())
+        if (_isRunning || !ValidateForSaveOrRun())
         {
             return;
         }
 
         LogBox.Text = string.Empty;
+        SetRunningState(true);
         try
         {
-            var result = await _runService.RunAsync(_sequence, new UiExecutionObserver(AppendLog));
+            var snapshot = _yamlService.Load(_yamlService.Save(_sequence));
+            var result = await _runService.RunAsync(snapshot, new UiExecutionObserver(AppendLog));
+            var resultFile = await _resultStore.SaveAsync(result);
             StatusText.Text = $"运行完成：{DisplayFormatters.FormatVerdict(result.Verdict)}";
+            AppendLog($"结果已保存：{resultFile}");
         }
         catch (OperationCanceledException)
         {
@@ -575,6 +630,10 @@ public sealed partial class SequenceEditorView : UserControl
         {
             StatusText.Text = "运行失败。";
             AppendLog("运行失败：" + ex.Message);
+        }
+        finally
+        {
+            SetRunningState(false);
         }
     }
 
@@ -961,7 +1020,17 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            _selectedItem.VerdictSource.LowerLimit = EditorValueConverter.ParseNullableDouble(NumericLowerBox.Text);
+            if (EditorValueConverter.TryParseNullableDouble(NumericLowerBox.Text, out var value))
+            {
+                _numericLowerInputValid = true;
+                _selectedItem.VerdictSource.LowerLimit = value;
+                NumericLowerBox.SetValue(DataValidationErrors.ErrorsProperty, null);
+            }
+            else
+            {
+                _numericLowerInputValid = false;
+                DataValidationErrors.SetErrors(NumericLowerBox, [new InvalidDataException("请输入使用小数点的有效数字。")]);
+            }
         }
     }
 
@@ -969,8 +1038,38 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            _selectedItem.VerdictSource.UpperLimit = EditorValueConverter.ParseNullableDouble(NumericUpperBox.Text);
+            if (EditorValueConverter.TryParseNullableDouble(NumericUpperBox.Text, out var value))
+            {
+                _numericUpperInputValid = true;
+                _selectedItem.VerdictSource.UpperLimit = value;
+                NumericUpperBox.SetValue(DataValidationErrors.ErrorsProperty, null);
+            }
+            else
+            {
+                _numericUpperInputValid = false;
+                DataValidationErrors.SetErrors(NumericUpperBox, [new InvalidDataException("请输入使用小数点的有效数字。")]);
+            }
         }
+    }
+
+    private void SetRunningState(bool isRunning)
+    {
+        _isRunning = isRunning;
+        RunButton.IsEnabled = !isRunning;
+        NewButton.IsEnabled = !isRunning;
+        SaveButton.IsEnabled = !isRunning;
+        SaveAsButton.IsEnabled = !isRunning;
+        DeleteSequenceButton.IsEnabled = !isRunning;
+        SequenceCombo.IsEnabled = !isRunning;
+        IsHitTestVisible = !isRunning;
+        RunButton.IsHitTestVisible = true;
+        StatusText.Text = isRunning ? "运行中…" : StatusText.Text;
+    }
+
+    private void ReportOperationFailure(string operation, Exception exception)
+    {
+        StatusText.Text = operation;
+        AppendLog($"{operation}：{exception.Message}");
     }
 
     private void NumericSourceUnitBox_OnTextChanged(object? sender, TextChangedEventArgs e)

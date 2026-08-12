@@ -1,4 +1,6 @@
 using TestFramework.Abstractions.Models;
+using YamlDotNet.Core;
+using YamlDotNet.Core.Tokens;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -13,7 +15,6 @@ public sealed class TestSequenceYamlService
 
     private readonly IDeserializer _deserializer = new DeserializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
-        .IgnoreUnmatchedProperties()
         .Build();
 
     public TestSequence LoadFromFile(string filePath)
@@ -28,23 +29,74 @@ public sealed class TestSequenceYamlService
 
     public TestSequence Load(string yaml)
     {
+        RejectUnsupportedRoundTripSyntax(yaml);
         var dto = _deserializer.Deserialize<YamlTestSequence>(yaml) ?? new YamlTestSequence();
         return dto.ToDomain();
     }
 
     public void SaveToFile(TestSequence sequence, string filePath)
     {
-        File.WriteAllText(filePath, Save(sequence));
+        var (fullPath, tempPath) = PrepareAtomicSave(filePath);
+        try
+        {
+            File.WriteAllText(tempPath, Save(sequence));
+            File.Move(tempPath, fullPath, overwrite: true);
+        }
+        finally
+        {
+            DeleteTemporaryFile(tempPath);
+        }
     }
 
     public async Task SaveToFileAsync(TestSequence sequence, string filePath, CancellationToken cancellationToken = default)
     {
-        await File.WriteAllTextAsync(filePath, Save(sequence), cancellationToken).ConfigureAwait(false);
+        var (fullPath, tempPath) = PrepareAtomicSave(filePath);
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, Save(sequence), cancellationToken).ConfigureAwait(false);
+            File.Move(tempPath, fullPath, overwrite: true);
+        }
+        finally
+        {
+            DeleteTemporaryFile(tempPath);
+        }
     }
 
     public string Save(TestSequence sequence)
     {
         return _serializer.Serialize(YamlTestSequence.FromDomain(sequence));
+    }
+
+    private static (string FullPath, string TempPath) PrepareAtomicSave(string filePath)
+    {
+        var fullPath = Path.GetFullPath(filePath);
+        var directory = Path.GetDirectoryName(fullPath)!;
+        Directory.CreateDirectory(directory);
+        return (fullPath, Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp"));
+    }
+
+    private static void DeleteTemporaryFile(string tempPath)
+    {
+        if (File.Exists(tempPath))
+        {
+            File.Delete(tempPath);
+        }
+    }
+
+    private static void RejectUnsupportedRoundTripSyntax(string yaml)
+    {
+        var scanner = new Scanner(new StringReader(yaml), skipComments: false);
+        while (scanner.MoveNext())
+        {
+            switch (scanner.Current)
+            {
+                case Comment:
+                    throw new InvalidDataException("YAML comments are not supported by the visual editor because saving would discard them.");
+                case Anchor:
+                case AnchorAlias:
+                    throw new InvalidDataException("YAML anchors and aliases are not supported by the visual editor because saving would flatten them.");
+            }
+        }
     }
 
     private sealed class YamlTestSequence
@@ -320,9 +372,10 @@ public sealed class TestSequenceYamlService
     {
         return value?.Trim().ToLowerInvariant() switch
         {
+            "stop" => ErrorHandlingMode.Stop,
             "continue" => ErrorHandlingMode.Continue,
             "jumptocleanup" or "jump-to-cleanup" or "jump_to_cleanup" => ErrorHandlingMode.JumpToCleanup,
-            _ => ErrorHandlingMode.Stop
+            _ => throw new InvalidDataException($"Unknown onError value '{value}'. Expected stop, continue, or jumpToCleanup.")
         };
     }
 

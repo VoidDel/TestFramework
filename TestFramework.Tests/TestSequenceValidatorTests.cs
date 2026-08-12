@@ -9,6 +9,44 @@ namespace TestFramework.Tests;
 
 public sealed class TestSequenceValidatorTests
 {
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void Validate_ReportsNonFiniteNumericLimits(double limit)
+    {
+        var step = new TestStepDefinition
+        {
+            Id = "main",
+            Name = "Main",
+            PluginId = "demo.step",
+            PluginVersion = "1.0.0"
+        };
+        var sequence = new TestSequence
+        {
+            Name = "Sequence",
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    MainSteps = [step],
+                    VerdictSource = new VerdictSource
+                    {
+                        StepId = step.Id,
+                        OutputKey = "value",
+                        JudgeType = VerdictJudgeType.Numeric,
+                        LowerLimit = limit,
+                        UpperLimit = 10
+                    }
+                }
+            ]
+        };
+
+        var issues = new TestSequenceValidator().Validate(sequence);
+
+        Assert.Contains(issues, issue => issue.Path.EndsWith("lowerLimit", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_ReportsMissingPluginVersion()
     {

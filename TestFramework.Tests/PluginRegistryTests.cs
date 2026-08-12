@@ -2,12 +2,28 @@ using TestFramework.Abstractions.Execution;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.Core.Plugins;
+using System.Runtime.Loader;
+using TestFramework.Plugins.BasicSteps;
 using Xunit;
 
 namespace TestFramework.Tests;
 
 public sealed class PluginRegistryTests
 {
+    [Fact]
+    public void LoadFromAssembly_UsesAnIsolatedCollectibleLoadContext()
+    {
+        var plugins = new PluginLoader(new PluginRegistry())
+            .LoadFromAssembly(typeof(DelayStepPlugin).Assembly.Location);
+
+        var plugin = Assert.Single(plugins, candidate => candidate.Descriptor.PluginId == "basic.delay");
+        var loadContext = AssemblyLoadContext.GetLoadContext(plugin.GetType().Assembly);
+
+        Assert.NotNull(loadContext);
+        Assert.NotSame(AssemblyLoadContext.Default, loadContext);
+        Assert.True(loadContext.IsCollectible);
+    }
+
     [Fact]
     public void GetRequired_ReturnsRequestedVersion()
     {

@@ -36,11 +36,11 @@ Runtime step plugins should not depend on Avalonia. Custom parameter UI is regis
 
 On step exception or timeout, the runner creates an `Error` result and applies the step policy:
 
-- `Stop`: stop the sequence.
+- `Stop`: run the current item's cleanup steps, then stop the sequence.
 - `Continue`: continue with the next step in the same section.
 - `JumpToCleanup`: skip the rest of the current item and run cleanup.
 
-Cleanup steps run when normal execution completes or when a step chooses `JumpToCleanup`.
+Cleanup steps run when normal execution completes and after both `Stop` and `JumpToCleanup` errors. User cancellation remains immediate and can interrupt cleanup.
 
 ## Variables
 

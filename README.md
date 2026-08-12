@@ -25,7 +25,7 @@ TestFramework 是一个基于 .NET 和 Avalonia 的测试序列编辑与执行�
 
 ## 环境要求
 
-- .NET SDK 10.0 或更高版本
+- .NET SDK 10.0.300 功能带或更高的 .NET 10 功能带（以 `global.json` 为准）
 - Windows 桌面环境（用于运行 Avalonia 桌面应用）
 
 ## 构建与测试
@@ -56,6 +56,9 @@ config/sequence/*.yml
 - `保存` 会将当前序列保存到 `config/sequence`。
 - `另存` 会在 `config/sequence` 中生成当前序列的副本。
 - `删除` 会删除当前序列对应的文件。
+- `运行` 会执行当前序列，并将完整 JSON 结果写入程序运行目录的 `results` 文件夹。
+
+编辑器会拒绝包含未知字段、注释、锚点或别名的 YAML，避免打开后保存时静默丢失这些内容。
 
 ## 插件说明
 

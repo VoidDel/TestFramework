@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.Loader;
 using TestFramework.Abstractions.Resources;
 using TestFramework.Core.Plugins;
 
@@ -24,21 +23,24 @@ public sealed class ResourcePluginLoader
 
         foreach (var file in Directory.EnumerateFiles(directory, "*.dll", SearchOption.AllDirectories))
         {
-            Assembly assembly;
+            PluginAssemblyHandle? handle = null;
+            var pluginCountBefore = CountPlugins(report);
             try
             {
-                var fullPath = Path.GetFullPath(file);
-                assembly = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(candidate =>
-                    string.Equals(candidate.Location, fullPath, StringComparison.OrdinalIgnoreCase))
-                    ?? AssemblyLoadContext.Default.LoadFromAssemblyPath(fullPath);
+                handle = PluginAssemblyCatalog.Load(file);
+                LoadFromAssembly(handle.Value.Assembly, file, report);
             }
             catch (Exception ex)
             {
                 AddFailure(report, file, ex);
-                continue;
             }
-
-            LoadFromAssembly(assembly, file, report);
+            finally
+            {
+                if (handle.HasValue && CountPlugins(report) == pluginCountBefore)
+                {
+                    PluginAssemblyCatalog.ReleaseIfUnused(handle.Value);
+                }
+            }
         }
 
         return report;
@@ -47,7 +49,16 @@ public sealed class ResourcePluginLoader
     public ResourcePluginLoadReport LoadFromAssembly(Assembly assembly)
     {
         var report = new ResourcePluginLoadReport();
-        LoadFromAssembly(assembly, assembly.Location, report);
+        var assemblyPath = assembly.Location;
+        try
+        {
+            LoadFromAssembly(assembly, assemblyPath, report);
+        }
+        catch (Exception ex)
+        {
+            AddFailure(report, assemblyPath, ex);
+        }
+
         return report;
     }
 
@@ -124,5 +135,10 @@ public sealed class ResourcePluginLoader
             Message = ex.Message,
             Exception = ex
         });
+    }
+
+    private static int CountPlugins(ResourcePluginLoadReport report)
+    {
+        return report.InstrumentDrivers.Count + report.Transports.Count + report.Services.Count;
     }
 }

@@ -1,0 +1,52 @@
+name: Release contracts
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: |
+            Directory.Packages.props
+            global.json
+            **/*.csproj
+
+      - name: Restore
+        run: dotnet restore TestFramework.sln
+
+      - name: Build and test
+        run: dotnet test TestFramework.sln --configuration Release --no-restore
+
+      - name: Pack plugin contracts
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          dotnet pack TestFramework.Abstractions/TestFramework.Abstractions.csproj --configuration Release --no-build --output artifacts -p:PackageVersion=$version
+          dotnet pack TestFramework.Plugin.Abstractions.UI/TestFramework.Plugin.Abstractions.UI.csproj --configuration Release --no-build --output artifacts -p:PackageVersion=$version
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestFramework-contracts-${{ github.ref_name }}
+          path: artifacts/*.nupkg
+
+      - name: Create GitHub release
+        shell: pwsh
+        run: gh release create $env:GITHUB_REF_NAME artifacts/*.nupkg --generate-notes --title $env:GITHUB_REF_NAME
+        env:
+          GH_TOKEN: ${{ github.token }}

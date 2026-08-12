@@ -11,10 +11,11 @@
         </ComboBox.ItemTemplate>
       </ComboBox>
       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" HorizontalAlignment="Right">
-        <Button Content="新建" MinWidth="72" HorizontalContentAlignment="Center" Click="New_OnClick" />
-        <Button Content="保存" MinWidth="72" HorizontalContentAlignment="Center" Click="Save_OnClick" />
-        <Button Content="另存" MinWidth="72" HorizontalContentAlignment="Center" Click="SaveAs_OnClick" />
-        <Button Content="删除" MinWidth="72" HorizontalContentAlignment="Center" Click="DeleteSequence_OnClick" />
+        <Button Name="NewButton" Content="新建" MinWidth="72" HorizontalContentAlignment="Center" Click="New_OnClick" />
+        <Button Name="SaveButton" Content="保存" MinWidth="72" HorizontalContentAlignment="Center" Click="Save_OnClick" />
+        <Button Name="SaveAsButton" Content="另存" MinWidth="72" HorizontalContentAlignment="Center" Click="SaveAs_OnClick" />
+        <Button Name="DeleteSequenceButton" Content="删除" MinWidth="72" HorizontalContentAlignment="Center" Click="DeleteSequence_OnClick" />
+        <Button Name="RunButton" Content="运行" MinWidth="72" HorizontalContentAlignment="Center" Click="Run_OnClick" />
         <TextBlock Name="StatusText" VerticalAlignment="Center" Margin="12,0,0,0" />
       </StackPanel>
     </Grid>

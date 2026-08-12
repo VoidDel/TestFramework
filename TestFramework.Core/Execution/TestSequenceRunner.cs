@@ -9,6 +9,7 @@ namespace TestFramework.Core.Execution;
 
 public sealed class TestSequenceRunner
 {
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
     private readonly IPluginRegistry _pluginRegistry;
     private readonly ITestExecutionObserver _observer;
     private readonly RuntimeResourceProvider _resources;
@@ -53,7 +54,8 @@ public sealed class TestSequenceRunner
             var itemResult = await RunItemAsync(sequence, item, variables, cancellationToken).ConfigureAwait(false);
             result.ItemResults.Add(itemResult);
 
-            if (itemResult.Verdict == TestVerdict.Error && HasStopError(item, itemResult))
+            if (itemResult.Verdict == TestVerdict.Error &&
+                (item.MainSteps.Count == 0 || HasStopError(item, itemResult)))
             {
                 stopSequence = true;
             }
@@ -92,25 +94,28 @@ public sealed class TestSequenceRunner
 
         if (item.MainSteps.Count == 0)
         {
-            result.Verdict = TestVerdict.Error;
-            result.FinishedAt = DateTimeOffset.Now;
-            _observer.ItemFinished(item, result);
-            return result;
+            flow = FlowDecision.StopSequence;
+        }
+        else
+        {
+            flow = await RunSectionAsync(sequence, item, StepSection.Init, item.InitSteps, result.InitResults, stepResults, variables, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (flow == FlowDecision.Continue)
+            {
+                flow = await RunSectionAsync(sequence, item, StepSection.Main, item.MainSteps, result.MainResults, stepResults, variables, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
 
-        flow = await RunSectionAsync(sequence, item, StepSection.Init, item.InitSteps, result.InitResults, stepResults, variables, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (flow == FlowDecision.Continue)
+        if (item.CleanupSteps.Count > 0)
         {
-            flow = await RunSectionAsync(sequence, item, StepSection.Main, item.MainSteps, result.MainResults, stepResults, variables, cancellationToken)
+            var cleanupFlow = await RunSectionAsync(sequence, item, StepSection.Cleanup, item.CleanupSteps, result.CleanupResults, stepResults, variables, cancellationToken)
                 .ConfigureAwait(false);
-        }
-
-        if (flow is FlowDecision.Continue or FlowDecision.JumpToCleanup)
-        {
-            await RunSectionAsync(sequence, item, StepSection.Cleanup, item.CleanupSteps, result.CleanupResults, stepResults, variables, cancellationToken)
-                .ConfigureAwait(false);
+            if (flow == FlowDecision.Continue && cleanupFlow != FlowDecision.Continue)
+            {
+                flow = cleanupFlow;
+            }
         }
 
         result.VerdictSourceStepResult = ResolveVerdictSource(item, result.MainResults);
@@ -181,6 +186,7 @@ public sealed class TestSequenceRunner
         CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.Now;
+        CancellationTokenSource? timeoutCts = null;
 
         try
         {
@@ -188,7 +194,7 @@ public sealed class TestSequenceRunner
             var resolvedParameters = VariableResolver.ResolveDictionary(step.Parameters, variables);
             var settings = plugin.LoadSettings(resolvedParameters);
             var timeoutMs = step.TimeoutMs.GetValueOrDefault();
-            using var timeoutCts = timeoutMs > 0
+            timeoutCts = timeoutMs > 0
                 ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
                 : null;
 
@@ -219,17 +225,27 @@ public sealed class TestSequenceRunner
             result.FinishedAt = result.FinishedAt == default ? DateTimeOffset.Now : result.FinishedAt;
             return result;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && step.TimeoutMs.GetValueOrDefault() > 0)
-        {
-            return CreateErrorResult(step, startedAt, $"Step timed out after {step.TimeoutMs} ms.", null);
-        }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OperationCanceledException ex) when (
+            timeoutCts?.IsCancellationRequested == true &&
+            ex.CancellationToken == timeoutCts.Token)
+        {
+            return CreateErrorResult(step, startedAt, $"Step timed out after {step.TimeoutMs} ms.", ex);
+        }
+        catch (OperationCanceledException ex)
+        {
+            return CreateErrorResult(step, startedAt, ex.Message, ex);
         }
         catch (Exception ex)
         {
             return CreateErrorResult(step, startedAt, ex.Message, ex);
+        }
+        finally
+        {
+            timeoutCts?.Dispose();
         }
     }
 
@@ -351,6 +367,11 @@ public sealed class TestSequenceRunner
             return TestVerdict.Inconclusive;
         }
 
+        if (!double.IsFinite(number))
+        {
+            return TestVerdict.Inconclusive;
+        }
+
         if (source.LowerLimit.HasValue && number < source.LowerLimit.Value)
         {
             return TestVerdict.Fail;
@@ -372,12 +393,16 @@ public sealed class TestSequenceRunner
         {
             var passed = source.StringMode switch
             {
-                StringJudgeMode.Regex => Regex.IsMatch(text, expected),
+                StringJudgeMode.Regex => Regex.IsMatch(text, expected, RegexOptions.None, RegexTimeout),
                 _ => string.Equals(text, expected, StringComparison.Ordinal)
             };
             return passed ? TestVerdict.Pass : TestVerdict.Fail;
         }
         catch (ArgumentException)
+        {
+            return TestVerdict.Inconclusive;
+        }
+        catch (RegexMatchTimeoutException)
         {
             return TestVerdict.Inconclusive;
         }

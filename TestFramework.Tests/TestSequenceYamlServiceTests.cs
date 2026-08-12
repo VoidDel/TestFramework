@@ -88,6 +88,45 @@ public sealed class TestSequenceYamlServiceTests
         Assert.Equal("V", item.VerdictSource.Unit);
     }
 
+    [Fact]
+    public void Load_RejectsUnknownOnErrorInsteadOfSilentlyChangingItToStop()
+    {
+        var yaml = """
+            name: Sequence
+            items:
+            - name: Item
+              main:
+              - name: Step
+                pluginId: demo.step
+                onError: continuee
+            """;
+
+        var exception = Assert.Throws<InvalidDataException>(() => new TestSequenceYamlService().Load(yaml));
+
+        Assert.Contains("continuee", exception.Message);
+    }
+
+    [Fact]
+    public void Load_RejectsUnknownFieldsInsteadOfDiscardingThemOnSave()
+    {
+        var yaml = """
+            name: Sequence
+            futureSetting: keep-me
+            items: []
+            """;
+
+        Assert.ThrowsAny<Exception>(() => new TestSequenceYamlService().Load(yaml));
+    }
+
+    [Theory]
+    [InlineData("# important\nname: Sequence\nitems: []")]
+    [InlineData("name: &sequenceName Sequence\nitems: []")]
+    [InlineData("name: Sequence\nvariables:\n  value: &shared 1\n  copy: *shared\nitems: []")]
+    public void Load_RejectsYamlSyntaxThatCannotBePreservedOnSave(string yaml)
+    {
+        Assert.Throws<InvalidDataException>(() => new TestSequenceYamlService().Load(yaml));
+    }
+
     private static TestStepDefinition Step(string id)
     {
         return new TestStepDefinition

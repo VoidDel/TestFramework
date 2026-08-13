@@ -1,4 +1,7 @@
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia;
+using Avalonia.VisualTree;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.App.Services;
@@ -33,6 +36,13 @@ public sealed partial class SequenceEditorView : UserControl
     private bool _isRunning;
     private bool _numericLowerInputValid = true;
     private bool _numericUpperInputValid = true;
+    private readonly Dictionary<ITestStepPlugin, string> _pluginCategories = [];
+    private static readonly DataFormat<SequenceTreeDragData> SequenceTreeNodeDataFormat =
+        DataFormat.CreateInProcessFormat<SequenceTreeDragData>("application/x-testframework-sequence-tree-node");
+    private SequenceTreeNode? _dragSourceNode;
+    private PointerPressedEventArgs? _dragStartEvent;
+    private Avalonia.Point _dragStartPoint;
+    private bool _dragInProgress;
 
     public enum TreeNodeKind
     {
@@ -68,6 +78,22 @@ public sealed partial class SequenceEditorView : UserControl
         public required string ValueText { get; init; }
     }
 
+    public sealed class PluginTreeNode
+    {
+        public required string Title { get; init; }
+
+        public ITestStepPlugin? Plugin { get; init; }
+
+        public List<PluginTreeNode> Children { get; } = [];
+    }
+
+    private sealed class SequenceTreeDragData
+    {
+        public required SequenceTreeNode Node { get; init; }
+
+        public required bool Copy { get; init; }
+    }
+
     public sealed class Option<T>
     {
         public required T Value { get; init; }
@@ -93,8 +119,7 @@ public sealed partial class SequenceEditorView : UserControl
         _resultStore = new TestResultStore(resultDirectory);
         _validator = new TestSequenceValidator(_pluginRegistry);
 
-        PluginCombo.ItemsSource = _pluginRegistry.Plugins;
-        PluginCombo.SelectedIndex = 0;
+
         VerdictTypeCombo.ItemsSource = new[]
         {
             new Option<VerdictJudgeType> { Value = VerdictJudgeType.PassFail, Text = "Pass/Fail" },
@@ -113,14 +138,19 @@ public sealed partial class SequenceEditorView : UserControl
 
     private void RegisterPlugins()
     {
-        _pluginRegistry.Register(new DelayStepPlugin());
-        _pluginRegistry.Register(new LogStepPlugin());
-        _pluginRegistry.Register(new LimitCheckStepPlugin());
-        _pluginRegistry.Register(new ThrowStepPlugin());
+        RegisterBuiltInPlugin(new DelayStepPlugin());
+        RegisterBuiltInPlugin(new LogStepPlugin());
+        RegisterBuiltInPlugin(new LimitCheckStepPlugin());
+        RegisterBuiltInPlugin(new ThrowStepPlugin());
 
         var pluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins");
         var loader = new PluginLoader(_pluginRegistry);
         var report = loader.LoadFromDirectoryWithReport(pluginDirectory);
+        foreach (var plugin in report.LoadedPlugins)
+        {
+            _pluginCategories[plugin] = GetPluginCategory(pluginDirectory, report.PluginPaths[plugin]);
+        }
+
         RegisterSettingsEditors(report.LoadedPlugins);
         foreach (var failure in report.Failures)
         {
@@ -131,6 +161,83 @@ public sealed partial class SequenceEditorView : UserControl
         foreach (var failure in resourceReport.Failures)
         {
             AppendLog($"资源插件加载失败：{failure.AssemblyPath} - {failure.Message}");
+        }
+    }
+
+    private void RegisterBuiltInPlugin(ITestStepPlugin plugin)
+    {
+        _pluginRegistry.Register(plugin);
+        _pluginCategories[plugin] = "内置";
+    }
+
+    private static string GetPluginCategory(string pluginDirectory, string assemblyPath)
+    {
+        var relativeDirectory = Path.GetRelativePath(pluginDirectory, Path.GetDirectoryName(assemblyPath) ?? pluginDirectory);
+        if (string.IsNullOrWhiteSpace(relativeDirectory) || relativeDirectory == ".")
+        {
+            return "外部";
+        }
+
+        return relativeDirectory.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+    }
+
+    private IReadOnlyList<PluginTreeNode> BuildPluginTree()
+    {
+        var roots = new SortedDictionary<string, PluginTreeNode>(StringComparer.Ordinal);
+        var categories = new Dictionary<string, PluginTreeNode>(StringComparer.Ordinal);
+        foreach (var plugin in _pluginRegistry.Plugins.OrderBy(plugin => plugin.Descriptor.DisplayName, StringComparer.CurrentCulture))
+        {
+            var category = _pluginCategories.TryGetValue(plugin, out var value) ? value : "外部";
+            var parent = EnsurePluginCategory(roots, categories, category);
+            parent.Children.Add(new PluginTreeNode
+            {
+                Title = plugin.Descriptor.DisplayName,
+                Plugin = plugin
+            });
+        }
+
+        return roots.Values.ToList();
+    }
+
+    private static PluginTreeNode EnsurePluginCategory(
+        IDictionary<string, PluginTreeNode> roots,
+        IDictionary<string, PluginTreeNode> categories,
+        string category)
+    {
+        PluginTreeNode? parent = null;
+        var categoryKey = string.Empty;
+        foreach (var segment in category.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            categoryKey = string.IsNullOrEmpty(categoryKey) ? segment : $"{categoryKey}/{segment}";
+            if (!categories.TryGetValue(categoryKey, out var node))
+            {
+                node = new PluginTreeNode { Title = segment };
+                categories.Add(categoryKey, node);
+                if (parent is null)
+                {
+                    roots.Add(segment, node);
+                }
+                else
+                {
+                    parent.Children.Add(node);
+                }
+            }
+
+            parent = node;
+        }
+
+        return parent ?? throw new InvalidOperationException("插件分类不能为空。");
+    }
+
+    private static IEnumerable<PluginTreeNode> FlattenPluginTree(PluginTreeNode node)
+    {
+        yield return node;
+        foreach (var child in node.Children)
+        {
+            foreach (var descendant in FlattenPluginTree(child))
+            {
+                yield return descendant;
+            }
         }
     }
 
@@ -794,9 +901,31 @@ public sealed partial class SequenceEditorView : UserControl
         RefreshVariablesList();
     }
 
-    private void AddStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void AddStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_selectedItem is null || PluginCombo.SelectedItem is not ITestStepPlugin plugin)
+        if (SequenceTree.SelectedItem is SequenceTreeNode node)
+        {
+            ApplyTreeSelection(node);
+        }
+
+        if (_selectedItem is null)
+        {
+            return;
+        }
+
+        var picker = new StepPluginPickerWindow(BuildPluginTree());
+        ITestStepPlugin? plugin;
+        if (TopLevel.GetTopLevel(this) is Window owner)
+        {
+            plugin = await picker.ShowDialog<ITestStepPlugin?>(owner);
+        }
+        else
+        {
+            picker.Show();
+            return;
+        }
+
+        if (plugin is null)
         {
             return;
         }
@@ -816,6 +945,11 @@ public sealed partial class SequenceEditorView : UserControl
 
     private async void EditStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        if (SequenceTree.SelectedItem is SequenceTreeNode node)
+        {
+            ApplyTreeSelection(node);
+        }
+
         await OpenSelectedStepEditorAsync();
     }
 
@@ -843,6 +977,11 @@ public sealed partial class SequenceEditorView : UserControl
 
     private void CopyStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        if (SequenceTree.SelectedItem is SequenceTreeNode node)
+        {
+            ApplyTreeSelection(node);
+        }
+
         var steps = GetCurrentSteps();
         if (steps is null || _selectedStep is null)
         {
@@ -859,23 +998,43 @@ public sealed partial class SequenceEditorView : UserControl
 
     private void DeleteStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        var steps = GetCurrentSteps();
-        if (steps is null || _selectedStep is null)
+        DeleteSelectedTreeNode();
+    }
+
+    private void DeleteTreeNode_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        DeleteSelectedTreeNode();
+    }
+
+    private void DeleteSelectedTreeNode()
+    {
+        if (SequenceTree.SelectedItem is not SequenceTreeNode node)
         {
             return;
         }
 
-        var index = steps.IndexOf(_selectedStep);
-        steps.Remove(_selectedStep);
-
-        if (_selectedItem is not null && _selectedItem.VerdictSource.StepId == _selectedStep.Id)
+        ApplyTreeSelection(node);
+        if (node.Kind == TreeNodeKind.Item)
         {
-            _selectedItem.VerdictSource.StepId = _selectedItem.MainSteps.FirstOrDefault()?.Id;
+            DeleteItem_OnClick(null, null!);
         }
+        else if (node.Kind == TreeNodeKind.Step)
+        {
+            var steps = GetCurrentSteps();
+            if (steps is not null && _selectedStep is not null)
+            {
+                var index = steps.IndexOf(_selectedStep);
+                steps.Remove(_selectedStep);
+                if (_selectedItem?.VerdictSource.StepId == _selectedStep.Id)
+                {
+                    _selectedItem.VerdictSource.StepId = _selectedItem.MainSteps.FirstOrDefault()?.Id;
+                }
 
-        _selectedStep = steps.ElementAtOrDefault(Math.Clamp(index, 0, Math.Max(0, steps.Count - 1)));
-        RefreshSequenceTree();
-        RefreshItemPanel();
+                _selectedStep = steps.ElementAtOrDefault(Math.Clamp(index, 0, Math.Max(0, steps.Count - 1)));
+                RefreshSequenceTree();
+                RefreshItemPanel();
+            }
+        }
     }
 
     private void MoveStepUp_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -963,6 +1122,237 @@ public sealed partial class SequenceEditorView : UserControl
             ApplyTreeSelection(node);
             await OpenSelectedStepEditorAsync();
         }
+    }
+
+    private void SequenceTree_OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Delete)
+        {
+            DeleteSelectedTreeNode();
+            e.Handled = true;
+        }
+    }
+
+    private void SequenceTree_OnPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _dragSourceNode = FindSequenceTreeNode(e.Source as Visual);
+        _dragStartEvent = _dragSourceNode is { Kind: TreeNodeKind.Item or TreeNodeKind.Step } ? e : null;
+        _dragStartPoint = e.GetPosition(SequenceTree);
+    }
+
+    private async void SequenceTree_OnPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_dragInProgress || _dragStartEvent is null || _dragSourceNode is null ||
+            !e.GetCurrentPoint(SequenceTree).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        var currentPoint = e.GetPosition(SequenceTree);
+        if (Math.Abs(currentPoint.X - _dragStartPoint.X) < 4 && Math.Abs(currentPoint.Y - _dragStartPoint.Y) < 4)
+        {
+            return;
+        }
+
+        _dragInProgress = true;
+        try
+        {
+            var data = new DataTransfer();
+            data.Add(DataTransferItem.Create(SequenceTreeNodeDataFormat, new SequenceTreeDragData
+            {
+                Node = _dragSourceNode,
+                Copy = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+            }));
+            await DragDrop.DoDragDropAsync(
+                _dragStartEvent,
+                data,
+                DragDropEffects.Move | DragDropEffects.Copy);
+        }
+        finally
+        {
+            _dragInProgress = false;
+            _dragStartEvent = null;
+            _dragSourceNode = null;
+        }
+    }
+
+    private void SequenceTree_OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _dragStartEvent = null;
+        _dragSourceNode = null;
+    }
+
+    private void SequenceTree_OnDragOver(object? sender, DragEventArgs e)
+    {
+        var source = e.DataTransfer.TryGetValue(SequenceTreeNodeDataFormat);
+        var target = FindSequenceTreeNode(e.Source as Visual);
+        if (source is null || target is null || !CanDrop(source.Node, target))
+        {
+            e.DragEffects = DragDropEffects.None;
+            return;
+        }
+
+        e.DragEffects = source.Copy ? DragDropEffects.Copy : DragDropEffects.Move;
+    }
+
+    private void SequenceTree_OnDrop(object? sender, DragEventArgs e)
+    {
+        var source = e.DataTransfer.TryGetValue(SequenceTreeNodeDataFormat);
+        var target = FindSequenceTreeNode(e.Source as Visual);
+        if (source is null || target is null || !CanDrop(source.Node, target))
+        {
+            return;
+        }
+
+        if (source.Node.Kind == TreeNodeKind.Item)
+        {
+            MoveOrCopyItem(source, target);
+        }
+        else
+        {
+            MoveOrCopyStep(source, target);
+        }
+    }
+
+    private static SequenceTreeNode? FindSequenceTreeNode(Visual? source)
+    {
+        return source?.GetSelfAndVisualAncestors()
+            .OfType<Control>()
+            .Select(control => control.DataContext)
+            .OfType<SequenceTreeNode>()
+            .FirstOrDefault();
+    }
+
+    private static bool CanDrop(SequenceTreeNode source, SequenceTreeNode target)
+    {
+        return source.Kind switch
+        {
+            TreeNodeKind.Item => target.Kind is TreeNodeKind.Item or TreeNodeKind.Sequence,
+            TreeNodeKind.Step => target.Kind is TreeNodeKind.Step or TreeNodeKind.Section,
+            _ => false
+        };
+    }
+
+    private void MoveOrCopyItem(SequenceTreeDragData source, SequenceTreeNode target)
+    {
+        if (source.Node.Item is null)
+        {
+            return;
+        }
+
+        var item = source.Copy ? CloneItem(source.Node.Item) : source.Node.Item;
+        var sourceIndex = _sequence.Items.IndexOf(source.Node.Item);
+        var insertIndex = target.Kind == TreeNodeKind.Item && target.Item is not null
+            ? _sequence.Items.IndexOf(target.Item)
+            : _sequence.Items.Count;
+
+        if (!source.Copy)
+        {
+            _sequence.Items.Remove(source.Node.Item);
+            if (sourceIndex < insertIndex)
+            {
+                insertIndex--;
+            }
+        }
+
+        _sequence.Items.Insert(Math.Max(0, insertIndex), item);
+        _selectedItem = item;
+        _selectedStep = null;
+        RefreshAll();
+    }
+
+    private void MoveOrCopyStep(SequenceTreeDragData source, SequenceTreeNode target)
+    {
+        if (source.Node.Item is null || source.Node.Step is null || source.Node.Section is null)
+        {
+            return;
+        }
+
+        var sourceSteps = GetSteps(source.Node.Item, source.Node.Section.Value);
+        var targetItem = target.Item;
+        var targetSection = target.Kind == TreeNodeKind.Step ? target.Section : target.Section;
+        if (sourceSteps is null || targetItem is null || targetSection is null)
+        {
+            return;
+        }
+
+        var targetSteps = GetSteps(targetItem, targetSection.Value);
+        if (targetSteps is null)
+        {
+            return;
+        }
+
+        var step = source.Copy ? source.Node.Step.Clone() : source.Node.Step;
+        var sourceIndex = sourceSteps.IndexOf(source.Node.Step);
+        var insertIndex = target.Kind == TreeNodeKind.Step && target.Step is not null
+            ? targetSteps.IndexOf(target.Step)
+            : targetSteps.Count;
+
+        if (!source.Copy)
+        {
+            sourceSteps.Remove(source.Node.Step);
+            if (ReferenceEquals(sourceSteps, targetSteps) && sourceIndex < insertIndex)
+            {
+                insertIndex--;
+            }
+        }
+
+        targetSteps.Insert(Math.Max(0, insertIndex), step);
+        _selectedItem = targetItem;
+        _selectedSection = targetSection.Value;
+        _selectedStep = step;
+        RefreshSequenceTree();
+        RefreshItemPanel();
+    }
+
+    private static List<TestStepDefinition>? GetSteps(TestItemDefinition item, StepSection section)
+    {
+        return section switch
+        {
+            StepSection.Init => item.InitSteps,
+            StepSection.Main => item.MainSteps,
+            StepSection.Cleanup => item.CleanupSteps,
+            _ => null
+        };
+    }
+
+    private static TestItemDefinition CloneItem(TestItemDefinition item)
+    {
+        var clone = new TestItemDefinition
+        {
+            Name = item.Name + " Copy",
+            Enabled = item.Enabled,
+            VerdictSource = new VerdictSource
+            {
+                OutputKey = item.VerdictSource.OutputKey,
+                JudgeType = item.VerdictSource.JudgeType,
+                LowerLimit = item.VerdictSource.LowerLimit,
+                UpperLimit = item.VerdictSource.UpperLimit,
+                SourceUnit = item.VerdictSource.SourceUnit,
+                Unit = item.VerdictSource.Unit,
+                StringMode = item.VerdictSource.StringMode,
+                ExpectedString = item.VerdictSource.ExpectedString
+            },
+            InitSteps = item.InitSteps.Select(step => step.Clone()).ToList(),
+            MainSteps = item.MainSteps.Select(step => step.Clone()).ToList(),
+            CleanupSteps = item.CleanupSteps.Select(step => step.Clone()).ToList()
+        };
+
+        clone.VerdictSource.StepId = GetClonedVerdictStepId(item, clone);
+        return clone;
+    }
+
+    private static string? GetClonedVerdictStepId(TestItemDefinition source, TestItemDefinition clone)
+    {
+        if (string.IsNullOrWhiteSpace(source.VerdictSource.StepId))
+        {
+            return null;
+        }
+
+        var sourceSteps = source.InitSteps.Concat(source.MainSteps).Concat(source.CleanupSteps).ToList();
+        var cloneSteps = clone.InitSteps.Concat(clone.MainSteps).Concat(clone.CleanupSteps).ToList();
+        var index = sourceSteps.FindIndex(step => step.Id == source.VerdictSource.StepId);
+        return index >= 0 ? cloneSteps[index].Id : null;
     }
 
     private void ApplyTreeSelection(SequenceTreeNode node)

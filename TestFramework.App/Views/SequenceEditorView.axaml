@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:input="clr-namespace:Avalonia.Input;assembly=Avalonia.Base"
              x:Class="TestFramework.App.Views.SequenceEditorView">
   <Grid Margin="12">
     <Grid.RowDefinitions>
@@ -55,10 +56,30 @@
             <TextBox Name="SequenceNameBox" TextChanged="SequenceNameBox_OnTextChanged" />
           </StackPanel>
           <Grid Grid.Row="2" RowDefinitions="*,Auto" Margin="0,10,0,0">
-            <TreeView Name="SequenceTree" SelectionChanged="SequenceTree_OnSelectionChanged" DoubleTapped="SequenceTree_OnDoubleTapped">
+            <TreeView Name="SequenceTree" input:DragDrop.AllowDrop="True"
+                      SelectionChanged="SequenceTree_OnSelectionChanged"
+                      DoubleTapped="SequenceTree_OnDoubleTapped"
+                      PointerPressed="SequenceTree_OnPointerPressed"
+                      PointerMoved="SequenceTree_OnPointerMoved"
+                      PointerReleased="SequenceTree_OnPointerReleased"
+                      KeyDown="SequenceTree_OnKeyDown"
+                      input:DragDrop.DragOver="SequenceTree_OnDragOver"
+                      input:DragDrop.Drop="SequenceTree_OnDrop">
               <TreeView.Styles>
                 <Style Selector="TreeViewItem">
                   <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                  <Setter Property="DragDrop.AllowDrop" Value="True" />
+                  <Setter Property="ContextMenu">
+                    <ContextMenu>
+                      <MenuItem Header="增加测试项" Click="AddItem_OnClick" />
+                      <MenuItem Header="删除测试项" Click="DeleteTreeNode_OnClick" />
+                      <Separator />
+                      <MenuItem Header="增加 Step" Click="AddStep_OnClick" />
+                      <MenuItem Header="编辑 Step" Click="EditStep_OnClick" />
+                      <MenuItem Header="复制 Step" Click="CopyStep_OnClick" />
+                      <MenuItem Header="删除 Step" Click="DeleteTreeNode_OnClick" />
+                    </ContextMenu>
+                  </Setter>
                 </Style>
               </TreeView.Styles>
               <TreeView.ItemTemplate>
@@ -148,23 +169,10 @@
             <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,12,0,0">
               <TextBlock Classes="hint" FontWeight="SemiBold" Text="Step 管理" />
               <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,6,0,0">
-                <ComboBox Name="PluginCombo" HorizontalAlignment="Stretch">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                      <TextBlock Text="{Binding Descriptor.DisplayName}" />
-                    </DataTemplate>
-                  </ComboBox.ItemTemplate>
-                </ComboBox>
+                <TextBlock Classes="hint" Text="选择“添加 Step”以打开插件分类列表。" VerticalAlignment="Center" />
                 <Button Grid.Column="1" Content="添加 Step" MinWidth="88" Margin="8,0,0,0" Click="AddStep_OnClick" />
               </Grid>
-              <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                <Button Content="编辑" MinWidth="64" Margin="0,0,6,0" Click="EditStep_OnClick" />
-                <Button Content="复制" MinWidth="64" Margin="0,0,6,0" Click="CopyStep_OnClick" />
-                <Button Content="删除" MinWidth="64" Margin="0,0,6,0" Click="DeleteStep_OnClick" />
-                <Button Content="上移" MinWidth="64" Margin="0,0,6,0" Click="MoveStepUp_OnClick" />
-                <Button Content="下移" MinWidth="64" Click="MoveStepDown_OnClick" />
-              </WrapPanel>
-              <Border Classes="inner" Grid.Row="3" Margin="0,10,0,0" Padding="10,8">
+              <Border Classes="inner" Grid.Row="2" Margin="0,10,0,0" Padding="10,8">
                 <TextBlock Name="TreeSelectionText" Classes="hint" TextWrapping="Wrap" />
               </Border>
             </Grid>

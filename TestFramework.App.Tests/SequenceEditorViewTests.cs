@@ -48,6 +48,36 @@ public sealed class SequenceEditorViewTests
         }
     }
 
+    [Fact]
+    public async Task PluginPicker_GroupsBuiltInStepsUnderBuiltInCategory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
+        using var session = HeadlessUnitTestSession.StartNew(typeof(App));
+        try
+        {
+            await session.Dispatch(() =>
+            {
+                var view = new SequenceEditorView(Path.Combine(root, "sequences"), Path.Combine(root, "results"));
+                var plugins = Assert.IsAssignableFrom<IReadOnlyList<SequenceEditorView.PluginTreeNode>>(
+                    InvokePrivate(view, "BuildPluginTree"));
+                var picker = new StepPluginPickerWindow(plugins);
+                var pluginTree = picker.FindControl<TreeView>("PluginTree")!;
+                var categories = Assert.IsAssignableFrom<IEnumerable<SequenceEditorView.PluginTreeNode>>(pluginTree.ItemsSource).ToList();
+
+                var builtIn = Assert.Single(categories, category => category.Title == "内置");
+                Assert.Equal(4, builtIn.Children.Count);
+                Assert.All(builtIn.Children, plugin => Assert.NotNull(plugin.Plugin));
+            }, CancellationToken.None);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static object? InvokePrivate(object target, string methodName, params object?[]? arguments)
     {
         return target.GetType()

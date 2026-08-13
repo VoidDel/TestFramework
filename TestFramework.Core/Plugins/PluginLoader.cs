@@ -50,6 +50,7 @@ public sealed class PluginLoader
                 {
                     _registry.Register(plugin);
                     report.LoadedPlugins.Add(plugin);
+                    report.PluginPaths[plugin] = file;
                 }
                 catch (Exception ex)
                 {

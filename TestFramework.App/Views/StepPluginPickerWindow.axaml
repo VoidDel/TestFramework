@@ -1,0 +1,36 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TestFramework.App.Views.StepPluginPickerWindow"
+        Title="选择 Step"
+        Width="480"
+        Height="560"
+        MinWidth="400"
+        MinHeight="400"
+        Background="{DynamicResource AppWindowBackgroundBrush}">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="12">
+    <StackPanel>
+      <TextBlock Classes="section-title" Text="选择 Step 类型" />
+      <TextBlock Classes="hint" Margin="0,4,0,0" Text="按插件文件夹分类；双击具体 Step 可直接添加。" />
+    </StackPanel>
+
+    <Border Grid.Row="1" Classes="card" Margin="0,12,0,0" Padding="8">
+      <TreeView Name="PluginTree" DoubleTapped="PluginTree_OnDoubleTapped">
+        <TreeView.Styles>
+          <Style Selector="TreeViewItem">
+            <Setter Property="IsExpanded" Value="True" />
+          </Style>
+        </TreeView.Styles>
+        <TreeView.ItemTemplate>
+          <TreeDataTemplate ItemsSource="{Binding Children}">
+            <TextBlock Text="{Binding Title}" />
+          </TreeDataTemplate>
+        </TreeView.ItemTemplate>
+      </TreeView>
+    </Border>
+
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,12,0,0">
+      <Button Content="取消" Click="Cancel_OnClick" />
+      <Button Classes="accent" Content="添加" MinWidth="88" Click="Add_OnClick" />
+    </StackPanel>
+  </Grid>
+</Window>

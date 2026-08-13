@@ -6,6 +6,7 @@
         Width="1280"
         Height="820"
         MinWidth="1040"
-        MinHeight="680">
+        MinHeight="680"
+        Background="{DynamicResource AppWindowBackgroundBrush}">
   <views:SequenceEditorView />
 </Window>

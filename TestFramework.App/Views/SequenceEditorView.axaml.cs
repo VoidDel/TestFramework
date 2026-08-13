@@ -48,6 +48,10 @@ public sealed partial class SequenceEditorView : UserControl
 
         public required TreeNodeKind Kind { get; init; }
 
+        public required string Key { get; init; }
+
+        public bool IsExpanded { get; set; }
+
         public TestItemDefinition? Item { get; init; }
 
         public StepSection? Section { get; init; }
@@ -274,11 +278,51 @@ public sealed partial class SequenceEditorView : UserControl
         var wasUpdating = _updating;
         _updating = true;
 
+        var expandedNodes = GetExpandedNodeKeys(SequenceTree.ItemsSource);
         var root = BuildSequenceTree();
         SequenceTree.ItemsSource = new[] { root };
+        RestoreExpandedNodes(root, expandedNodes);
         SequenceTree.SelectedItem = FindCurrentTreeNode(root) ?? root;
 
         _updating = wasUpdating;
+    }
+
+    private static HashSet<string> GetExpandedNodeKeys(object? itemsSource)
+    {
+        var expandedNodes = new HashSet<string>(StringComparer.Ordinal);
+        if (itemsSource is not IEnumerable<SequenceTreeNode> roots)
+        {
+            return expandedNodes;
+        }
+
+        foreach (var node in roots)
+        {
+            CollectExpandedNodeKeys(node, expandedNodes);
+        }
+
+        return expandedNodes;
+    }
+
+    private static void CollectExpandedNodeKeys(SequenceTreeNode node, ISet<string> expandedNodes)
+    {
+        if (node.IsExpanded)
+        {
+            expandedNodes.Add(node.Key);
+        }
+
+        foreach (var child in node.Children)
+        {
+            CollectExpandedNodeKeys(child, expandedNodes);
+        }
+    }
+
+    private static void RestoreExpandedNodes(SequenceTreeNode node, ISet<string> expandedNodes)
+    {
+        node.IsExpanded = expandedNodes.Contains(node.Key);
+        foreach (var child in node.Children)
+        {
+            RestoreExpandedNodes(child, expandedNodes);
+        }
     }
 
     private void RefreshVerdictControls()
@@ -330,7 +374,9 @@ public sealed partial class SequenceEditorView : UserControl
         var root = new SequenceTreeNode
         {
             Title = _sequence.Name,
-            Kind = TreeNodeKind.Sequence
+            Kind = TreeNodeKind.Sequence,
+            Key = "sequence",
+            IsExpanded = true
         };
 
         foreach (var item in _sequence.Items)
@@ -339,6 +385,8 @@ public sealed partial class SequenceEditorView : UserControl
             {
                 Title = item.Enabled ? item.Name : $"{item.Name}（禁用）",
                 Kind = TreeNodeKind.Item,
+                Key = $"item:{item.Id}",
+                IsExpanded = true,
                 Item = item
             };
             itemNode.Children.Add(BuildSectionNode(item, StepSection.Init, "初始化", item.InitSteps));
@@ -360,6 +408,8 @@ public sealed partial class SequenceEditorView : UserControl
         {
             Title = $"{title} ({steps.Count})",
             Kind = TreeNodeKind.Section,
+            Key = $"item:{item.Id}:section:{section}",
+            IsExpanded = true,
             Item = item,
             Section = section
         };
@@ -370,6 +420,7 @@ public sealed partial class SequenceEditorView : UserControl
             {
                 Title = step.Enabled ? step.Name : $"{step.Name}（禁用）",
                 Kind = TreeNodeKind.Step,
+                Key = $"item:{item.Id}:section:{section}:step:{step.Id}",
                 Item = item,
                 Section = section,
                 Step = step

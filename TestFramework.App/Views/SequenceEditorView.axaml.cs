@@ -1,7 +1,10 @@
+using System.IO;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.VisualTree;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
@@ -44,6 +47,16 @@ public sealed partial class SequenceEditorView : UserControl
     private PointerPressedEventArgs? _dragStartEvent;
     private Avalonia.Point _dragStartPoint;
     private bool _dragInProgress;
+    private CancellationTokenSource? _runCts;
+    private bool _isDirty;
+
+    private enum StatusKind
+    {
+        Info,
+        Running,
+        Success,
+        Error
+    }
 
     public enum TreeNodeKind
     {
@@ -70,6 +83,14 @@ public sealed partial class SequenceEditorView : UserControl
         public TestStepDefinition? Step { get; init; }
 
         public List<SequenceTreeNode> Children { get; } = [];
+
+        public string DisplayName { get; init; } = string.Empty;
+
+        public string? BadgeText { get; init; }
+
+        public bool IsDisabled { get; init; }
+
+        public StreamGeometry? IconData { get; init; }
     }
 
     public sealed class VariableEntry
@@ -86,6 +107,8 @@ public sealed partial class SequenceEditorView : UserControl
         public ITestStepPlugin? Plugin { get; init; }
 
         public List<PluginTreeNode> Children { get; } = [];
+
+        public StreamGeometry? IconData => Plugin is not null ? GetIcon("IconPlugin") : GetIcon("IconFolder");
     }
 
     private sealed class SequenceTreeDragData
@@ -153,6 +176,41 @@ public sealed partial class SequenceEditorView : UserControl
 
         LoadSequenceDocuments();
         RefreshAll();
+        UpdateWindowTitle();
+        SyncThemeToggleIcon();
+
+        // 全局快捷键：Ctrl+S 保存、Ctrl+Shift+S 另存、Ctrl+N 新建、F5 运行/停止。
+        AddHandler(InputElement.KeyDownEvent, OnGlobalKeyDown, RoutingStrategies.Tunnel);
+    }
+
+    private void OnGlobalKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.S)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            {
+                SaveAs_OnClick(this, new Avalonia.Interactivity.RoutedEventArgs());
+            }
+            else
+            {
+                Save_OnClick(this, new Avalonia.Interactivity.RoutedEventArgs());
+            }
+            e.Handled = true;
+            return;
+        }
+
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.N)
+        {
+            New_OnClick(this, new Avalonia.Interactivity.RoutedEventArgs());
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.None)
+        {
+            Run_OnClick(this, new Avalonia.Interactivity.RoutedEventArgs());
+            e.Handled = true;
+        }
     }
 
     private void RegisterPlugins()
@@ -365,6 +423,7 @@ public sealed partial class SequenceEditorView : UserControl
         _selectedItem = _sequence.Items.FirstOrDefault();
         _selectedStep = null;
         _selectedVariableName = null;
+        ClearDirty();
     }
 
     private void RefreshAll()
@@ -495,14 +554,24 @@ public sealed partial class SequenceEditorView : UserControl
         _updating = wasUpdating;
     }
 
+    private static StreamGeometry? GetIcon(string resourceKey)
+    {
+        return Application.Current?.TryFindResource(resourceKey, out var res) == true && res is StreamGeometry geom
+            ? geom
+            : null;
+    }
+
     private SequenceTreeNode BuildSequenceTree()
     {
         var root = new SequenceTreeNode
         {
             Title = _sequence.Name,
+            DisplayName = _sequence.Name,
+            BadgeText = $"{_sequence.Items.Count} 项",
             Kind = TreeNodeKind.Sequence,
             Key = "sequence",
-            IsExpanded = true
+            IsExpanded = true,
+            IconData = GetIcon("IconSequence")
         };
 
         foreach (var item in _sequence.Items)
@@ -510,10 +579,14 @@ public sealed partial class SequenceEditorView : UserControl
             var itemNode = new SequenceTreeNode
             {
                 Title = item.Enabled ? item.Name : $"{item.Name}（禁用）",
+                DisplayName = item.Name,
+                BadgeText = item.Enabled ? null : "禁用",
+                IsDisabled = !item.Enabled,
                 Kind = TreeNodeKind.Item,
                 Key = $"item:{item.Id}",
                 IsExpanded = true,
-                Item = item
+                Item = item,
+                IconData = GetIcon("IconItem")
             };
             itemNode.Children.Add(BuildSectionNode(item, StepSection.Init, "初始化", item.InitSteps));
             itemNode.Children.Add(BuildSectionNode(item, StepSection.Main, "主流程", item.MainSteps));
@@ -530,14 +603,25 @@ public sealed partial class SequenceEditorView : UserControl
         string title,
         IReadOnlyList<TestStepDefinition> steps)
     {
+        var sectionIconKey = section switch
+        {
+            StepSection.Init => "IconInit",
+            StepSection.Main => "IconMain",
+            StepSection.Cleanup => "IconCleanup",
+            _ => "IconFolder"
+        };
+
         var sectionNode = new SequenceTreeNode
         {
             Title = $"{title} ({steps.Count})",
+            DisplayName = title,
+            BadgeText = $"{steps.Count}",
             Kind = TreeNodeKind.Section,
             Key = $"item:{item.Id}:section:{section}",
             IsExpanded = true,
             Item = item,
-            Section = section
+            Section = section,
+            IconData = GetIcon(sectionIconKey)
         };
 
         foreach (var step in steps)
@@ -545,11 +629,15 @@ public sealed partial class SequenceEditorView : UserControl
             sectionNode.Children.Add(new SequenceTreeNode
             {
                 Title = step.Enabled ? step.Name : $"{step.Name}（禁用）",
+                DisplayName = step.Name,
+                BadgeText = step.Enabled ? null : "禁用",
+                IsDisabled = !step.Enabled,
                 Kind = TreeNodeKind.Step,
                 Key = $"item:{item.Id}:section:{section}:step:{step.Id}",
                 Item = item,
                 Section = section,
-                Step = step
+                Step = step,
+                IconData = GetIcon("IconStep")
             });
         }
 
@@ -659,12 +747,26 @@ public sealed partial class SequenceEditorView : UserControl
         LogBox.CaretIndex = LogBox.Text?.Length ?? 0;
     }
 
+    private void ClearLog_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        LogBox.Text = string.Empty;
+    }
+
+    private async void CopyLog_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard && !string.IsNullOrEmpty(LogBox.Text))
+        {
+            await clipboard.SetTextAsync(LogBox.Text);
+            SetStatus("已复制日志到剪贴板。");
+        }
+    }
+
     private bool ValidateForSaveOrRun()
     {
         if (_selectedItem?.VerdictSource.JudgeType == VerdictJudgeType.Numeric &&
             (!_numericLowerInputValid || !_numericUpperInputValid))
         {
-            StatusText.Text = "数值限值格式无效。";
+            SetStatus("数值限值格式无效。", StatusKind.Error);
             AppendLog("校验失败：数值限值必须使用小数点格式，例如 4.8。");
             return false;
         }
@@ -672,11 +774,11 @@ public sealed partial class SequenceEditorView : UserControl
         var issues = _validator.Validate(_sequence);
         if (issues.Count == 0)
         {
-            StatusText.Text = "校验通过。";
+            SetStatus("校验通过。", StatusKind.Success);
             return true;
         }
 
-        StatusText.Text = $"校验失败：{issues.Count} 个问题。";
+        SetStatus($"校验失败：{issues.Count} 个问题。", StatusKind.Error);
         AppendLog("校验失败：");
         foreach (var issue in issues)
         {
@@ -717,6 +819,8 @@ public sealed partial class SequenceEditorView : UserControl
         {
             var file = await _documentStore.SaveAsync(EnsureCurrentDocument());
             RefreshSequenceCombo();
+            ClearDirty();
+            SetStatus("保存成功。", StatusKind.Success);
             AppendLog($"已保存：{file}");
         }
         catch (Exception ex)
@@ -783,29 +887,39 @@ public sealed partial class SequenceEditorView : UserControl
 
     private async void Run_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_isRunning || !ValidateForSaveOrRun())
+        if (_isRunning)
+        {
+            // 运行中点击 = 停止
+            _runCts?.Cancel();
+            return;
+        }
+
+        if (!ValidateForSaveOrRun())
         {
             return;
         }
 
         LogBox.Text = string.Empty;
+        _runCts?.Dispose();
+        _runCts = new CancellationTokenSource();
         SetRunningState(true);
         try
         {
             var snapshot = _yamlService.Load(_yamlService.Save(_sequence));
-            var result = await _runService.RunAsync(snapshot, new UiExecutionObserver(AppendLog));
+            var result = await _runService.RunAsync(snapshot, new UiExecutionObserver(AppendLog), _runCts.Token);
             var resultFile = await _resultStore.SaveAsync(result);
-            StatusText.Text = $"运行完成：{DisplayFormatters.FormatVerdict(result.Verdict)}";
+            SetStatus($"运行完成：{DisplayFormatters.FormatVerdict(result.Verdict)}",
+                result.Verdict == TestVerdict.Pass ? StatusKind.Success : StatusKind.Error);
             AppendLog($"结果已保存：{resultFile}");
         }
         catch (OperationCanceledException)
         {
-            StatusText.Text = "运行已取消。";
+            SetStatus("运行已取消。", StatusKind.Info);
             AppendLog("运行已取消。");
         }
         catch (Exception ex)
         {
-            StatusText.Text = "运行失败。";
+            SetStatus("运行失败。", StatusKind.Error);
             AppendLog("运行失败：" + ex.Message);
         }
         finally
@@ -825,6 +939,7 @@ public sealed partial class SequenceEditorView : UserControl
         item.VerdictSource.JudgeType = VerdictJudgeType.PassFail;
 
         _sequence.Items.Add(item);
+        MarkDirty();
         _selectedItem = item;
         _selectedStep = null;
         RefreshAll();
@@ -839,6 +954,7 @@ public sealed partial class SequenceEditorView : UserControl
 
         var index = _sequence.Items.IndexOf(_selectedItem);
         _sequence.Items.Remove(_selectedItem);
+        MarkDirty();
         _selectedItem = _sequence.Items.ElementAtOrDefault(Math.Clamp(index, 0, Math.Max(0, _sequence.Items.Count - 1)));
         _selectedStep = null;
         RefreshAll();
@@ -878,7 +994,7 @@ public sealed partial class SequenceEditorView : UserControl
 
         if (_sequence.Variables.ContainsKey(newName))
         {
-            StatusText.Text = $"变量已存在：{newName}";
+            SetStatus($"变量已存在：{newName}", StatusKind.Error);
             RefreshVariablesList();
             return;
         }
@@ -887,6 +1003,7 @@ public sealed partial class SequenceEditorView : UserControl
         _sequence.Variables.Remove(_selectedVariableName);
         _sequence.Variables[newName] = value;
         _selectedVariableName = newName;
+        MarkDirty();
         RefreshVariablesList();
     }
 
@@ -897,7 +1014,12 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        _sequence.Variables[_selectedVariableName] = EditorValueConverter.Parse(VariableValueBox.Text);
+        var parsed = EditorValueConverter.Parse(VariableValueBox.Text);
+        if (!Equals(_sequence.Variables[_selectedVariableName], parsed))
+        {
+            _sequence.Variables[_selectedVariableName] = parsed;
+            MarkDirty();
+        }
     }
 
     private void AddVariable_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -905,6 +1027,7 @@ public sealed partial class SequenceEditorView : UserControl
         var name = UniqueNameGenerator.Create(_sequence.Variables.Keys, "variable");
         _sequence.Variables[name] = string.Empty;
         _selectedVariableName = name;
+        MarkDirty();
         RefreshVariablesList();
     }
 
@@ -917,6 +1040,7 @@ public sealed partial class SequenceEditorView : UserControl
 
         _sequence.Variables.Remove(_selectedVariableName);
         _selectedVariableName = null;
+        MarkDirty();
         RefreshVariablesList();
     }
 
@@ -958,6 +1082,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedStep = step;
+        MarkDirty();
         RefreshSequenceTree();
         RefreshItemPanel();
     }
@@ -983,6 +1108,8 @@ public sealed partial class SequenceEditorView : UserControl
         if (TopLevel.GetTopLevel(this) is Window owner)
         {
             await editor.ShowDialog(owner);
+            // 编辑器直接修改共享模型，关闭即视为可能已修改
+            MarkDirty();
         }
         else
         {
@@ -1011,6 +1138,7 @@ public sealed partial class SequenceEditorView : UserControl
         var copy = _selectedStep.Clone();
         steps.Insert(index + 1, copy);
         _selectedStep = copy;
+        MarkDirty();
         RefreshSequenceTree();
         RefreshItemPanel();
     }
@@ -1050,6 +1178,7 @@ public sealed partial class SequenceEditorView : UserControl
                 }
 
                 _selectedStep = steps.ElementAtOrDefault(Math.Clamp(index, 0, Math.Max(0, steps.Count - 1)));
+                MarkDirty();
                 RefreshSequenceTree();
                 RefreshItemPanel();
             }
@@ -1083,6 +1212,7 @@ public sealed partial class SequenceEditorView : UserControl
 
         steps.RemoveAt(oldIndex);
         steps.Insert(newIndex, _selectedStep);
+        MarkDirty();
         RefreshSequenceTree();
         RefreshTreeSelectionText();
     }
@@ -1101,6 +1231,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _sequence.Name = text;
+        MarkDirty();
         RefreshSequenceCombo();
         RefreshSequenceTree();
     }
@@ -1277,6 +1408,7 @@ public sealed partial class SequenceEditorView : UserControl
         _sequence.Items.Insert(Math.Max(0, insertIndex), item);
         _selectedItem = item;
         _selectedStep = null;
+        MarkDirty();
         RefreshAll();
     }
 
@@ -1320,6 +1452,7 @@ public sealed partial class SequenceEditorView : UserControl
         _selectedItem = targetItem;
         _selectedSection = targetSection.Value;
         _selectedStep = step;
+        MarkDirty();
         RefreshSequenceTree();
         RefreshItemPanel();
     }
@@ -1415,6 +1548,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedItem.Name = text;
+        MarkDirty();
         RefreshSequenceTree();
     }
 
@@ -1425,7 +1559,14 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        _selectedItem.Enabled = ItemEnabledBox.IsChecked == true;
+        var enabled = ItemEnabledBox.IsChecked == true;
+        if (_selectedItem.Enabled == enabled)
+        {
+            return;
+        }
+
+        _selectedItem.Enabled = enabled;
+        MarkDirty();
         RefreshSequenceTree();
     }
 
@@ -1443,6 +1584,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedItem.VerdictSource.StepId = stepId;
+        MarkDirty();
     }
 
     private void VerdictOutputBox_OnTextChanged(object? sender, TextChangedEventArgs e)
@@ -1461,6 +1603,7 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         _selectedItem.VerdictSource.OutputKey = outputKey;
+        MarkDirty();
     }
 
     private void VerdictTypeCombo_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1471,7 +1614,13 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         var type = SelectedOptionValue<VerdictJudgeType>(VerdictTypeCombo);
+        if (_selectedItem.VerdictSource.JudgeType == type)
+        {
+            return;
+        }
+
         _selectedItem.VerdictSource.JudgeType = type;
+        MarkDirty();
         NumericJudgePanel.IsVisible = type == VerdictJudgeType.Numeric;
         StringJudgePanel.IsVisible = type == VerdictJudgeType.String;
     }
@@ -1483,7 +1632,13 @@ public sealed partial class SequenceEditorView : UserControl
             if (EditorValueConverter.TryParseNullableDouble(NumericLowerBox.Text, out var value))
             {
                 _numericLowerInputValid = true;
-                _selectedItem.VerdictSource.LowerLimit = value;
+                // TextBox 的 TextChanged 可能经 Dispatcher 延迟触发（初始化赋值后、_updating 已复位），
+                // 值未变化时不能标脏。
+                if (!Nullable.Equals(_selectedItem.VerdictSource.LowerLimit, value))
+                {
+                    _selectedItem.VerdictSource.LowerLimit = value;
+                    MarkDirty();
+                }
                 NumericLowerBox.SetValue(DataValidationErrors.ErrorsProperty, null);
             }
             else
@@ -1501,7 +1656,11 @@ public sealed partial class SequenceEditorView : UserControl
             if (EditorValueConverter.TryParseNullableDouble(NumericUpperBox.Text, out var value))
             {
                 _numericUpperInputValid = true;
-                _selectedItem.VerdictSource.UpperLimit = value;
+                if (!Nullable.Equals(_selectedItem.VerdictSource.UpperLimit, value))
+                {
+                    _selectedItem.VerdictSource.UpperLimit = value;
+                    MarkDirty();
+                }
                 NumericUpperBox.SetValue(DataValidationErrors.ErrorsProperty, null);
             }
             else
@@ -1515,7 +1674,6 @@ public sealed partial class SequenceEditorView : UserControl
     private void SetRunningState(bool isRunning)
     {
         _isRunning = isRunning;
-        RunButton.IsEnabled = !isRunning;
         NewButton.IsEnabled = !isRunning;
         SaveButton.IsEnabled = !isRunning;
         SaveAsButton.IsEnabled = !isRunning;
@@ -1523,12 +1681,91 @@ public sealed partial class SequenceEditorView : UserControl
         SequenceCombo.IsEnabled = !isRunning;
         IsHitTestVisible = !isRunning;
         RunButton.IsHitTestVisible = true;
-        StatusText.Text = isRunning ? "运行中…" : StatusText.Text;
+
+        // 运行中：运行按钮切换为“停止”，状态点启动脉冲动画
+        RunButton.Classes.Set("success", !isRunning);
+        RunButton.Classes.Set("stop", isRunning);
+        RunButtonIcon.Data = GetIcon(isRunning ? "IconStop" : "IconRun");
+        RunButtonText.Text = isRunning ? "停止" : "运行";
+        ToolTip.SetTip(RunButton, isRunning ? "停止当前运行 (F5)" : "执行完整测试序列 (F5)");
+        StatusDot.Classes.Set("status-running", isRunning);
+        if (isRunning)
+        {
+            SetStatus("运行中…", StatusKind.Running);
+        }
+    }
+
+    private void SetStatus(string text, StatusKind kind = StatusKind.Info)
+    {
+        StatusText.Text = text;
+        var resourceKey = kind switch
+        {
+            StatusKind.Running => "AppWarningBrush",
+            StatusKind.Success => "AppSuccessBrush",
+            StatusKind.Error => "AppDangerBrush",
+            _ => "AppAccentBrush"
+        };
+        if (Application.Current?.TryFindResource(resourceKey, out var resource) == true && resource is IBrush brush)
+        {
+            StatusDot.Fill = brush;
+        }
+    }
+
+    private void MarkDirty()
+    {
+        _isDirty = true;
+        UpdateWindowTitle();
+    }
+
+    private void ClearDirty()
+    {
+        _isDirty = false;
+        UpdateWindowTitle();
+    }
+
+    private void UpdateWindowTitle()
+    {
+        if (TopLevel.GetTopLevel(this) is not Window window)
+        {
+            return;
+        }
+
+        var displayName = _currentDocument?.FilePath is { Length: > 0 } path
+            ? Path.GetFileName(path)
+            : _sequence.Name;
+        window.Title = $"测试序列编辑器 — {displayName}{(_isDirty ? " *" : string.Empty)}";
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        UpdateWindowTitle();
+    }
+
+    private void ThemeToggle_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Application.Current is null)
+        {
+            return;
+        }
+
+        Application.Current.RequestedThemeVariant =
+            Application.Current.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Dark
+                ? Avalonia.Styling.ThemeVariant.Light
+                : Avalonia.Styling.ThemeVariant.Dark;
+        SyncThemeToggleIcon();
+    }
+
+    private void SyncThemeToggleIcon()
+    {
+        // 暗色主题下显示太阳（点击切回亮色），反之显示月亮
+        var isDark = Application.Current?.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Dark;
+        ThemeToggleIcon.Data = GetIcon(isDark ? "IconSun" : "IconMoon");
     }
 
     private void ReportOperationFailure(string operation, Exception exception)
     {
-        StatusText.Text = operation;
+        SetStatus(operation, StatusKind.Error);
         AppendLog($"{operation}：{exception.Message}");
     }
 
@@ -1536,7 +1773,12 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            _selectedItem.VerdictSource.SourceUnit = EmptyToNull(NumericSourceUnitBox.Text);
+            var sourceUnit = EmptyToNull(NumericSourceUnitBox.Text);
+            if (!string.Equals(_selectedItem.VerdictSource.SourceUnit, sourceUnit, StringComparison.Ordinal))
+            {
+                _selectedItem.VerdictSource.SourceUnit = sourceUnit;
+                MarkDirty();
+            }
         }
     }
 
@@ -1544,7 +1786,12 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            _selectedItem.VerdictSource.Unit = EmptyToNull(NumericUnitBox.Text);
+            var unit = EmptyToNull(NumericUnitBox.Text);
+            if (!string.Equals(_selectedItem.VerdictSource.Unit, unit, StringComparison.Ordinal))
+            {
+                _selectedItem.VerdictSource.Unit = unit;
+                MarkDirty();
+            }
         }
     }
 
@@ -1552,15 +1799,24 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            _selectedItem.VerdictSource.StringMode = SelectedOptionValue<StringJudgeMode>(StringModeCombo);
+            var mode = SelectedOptionValue<StringJudgeMode>(StringModeCombo);
+            if (_selectedItem.VerdictSource.StringMode == mode)
+            {
+                return;
+            }
+
+            _selectedItem.VerdictSource.StringMode = mode;
+            MarkDirty();
         }
     }
 
     private void ExpectedStringBox_OnTextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (!_updating && _selectedItem is not null)
+        if (!_updating && _selectedItem is not null &&
+            !string.Equals(_selectedItem.VerdictSource.ExpectedString, ExpectedStringBox.Text, StringComparison.Ordinal))
         {
             _selectedItem.VerdictSource.ExpectedString = ExpectedStringBox.Text;
+            MarkDirty();
         }
     }
 

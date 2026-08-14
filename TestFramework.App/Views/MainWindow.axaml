@@ -7,6 +7,8 @@
         Height="820"
         MinWidth="1040"
         MinHeight="680"
+        CanResize="True"
+        WindowStartupLocation="CenterScreen"
         Background="{DynamicResource AppWindowBackgroundBrush}">
   <views:SequenceEditorView />
 </Window>

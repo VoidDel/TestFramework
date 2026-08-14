@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:input="clr-namespace:Avalonia.Input;assembly=Avalonia.Base"
+             xmlns:converters="clr-namespace:TestFramework.App.Converters"
              x:Class="TestFramework.App.Views.SequenceEditorView">
   <Grid Margin="12">
     <Grid.RowDefinitions>
@@ -11,29 +12,64 @@
     </Grid.RowDefinitions>
 
     <!-- 顶部工具栏：序列切换 + 文件操作 + 运行 -->
-    <Border Classes="card" Padding="12,8" Margin="0,0,0,10">
+    <Border Classes="card" Padding="14,10" Margin="0,0,0,12">
       <Grid ColumnDefinitions="Auto,*,Auto">
         <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+          <PathIcon Data="{StaticResource IconSequence}" Width="18" Height="18" Foreground="{DynamicResource AppAccentBrush}" />
           <TextBlock Classes="section-title" Text="测试序列" VerticalAlignment="Center" />
           <ComboBox Name="SequenceCombo" MinWidth="260" MaxWidth="420" VerticalAlignment="Center" SelectionChanged="SequenceCombo_OnSelectionChanged">
             <ComboBox.ItemTemplate>
               <DataTemplate>
-                <TextBlock Text="{Binding Name}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <PathIcon Data="{StaticResource IconSequence}" Width="14" Height="14" Foreground="{DynamicResource AppSubtleTextBrush}" />
+                  <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                </StackPanel>
               </DataTemplate>
             </ComboBox.ItemTemplate>
           </ComboBox>
         </StackPanel>
 
-        <TextBlock Grid.Column="1" Name="StatusText" Classes="hint"
-                   VerticalAlignment="Center" HorizontalAlignment="Right"
-                   Margin="12,0" TextTrimming="CharacterEllipsis" />
+        <Border Grid.Column="1" Classes="status-pill" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="12,0">
+          <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <Ellipse Name="StatusDot" Width="8" Height="8" Fill="{DynamicResource AppAccentBrush}" />
+            <TextBlock Name="StatusText" Classes="hint" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="320" />
+          </StackPanel>
+        </Border>
 
-        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
-          <Button Name="NewButton" Content="新建" Click="New_OnClick" />
-          <Button Name="SaveButton" Content="保存" Click="Save_OnClick" />
-          <Button Name="SaveAsButton" Content="另存" Click="SaveAs_OnClick" />
-          <Button Name="DeleteSequenceButton" Content="删除" Click="DeleteSequence_OnClick" />
-          <Button Name="RunButton" Classes="accent" Content="运行" MinWidth="88" Click="Run_OnClick" />
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+          <Button Name="NewButton" Classes="ghost" Click="New_OnClick" ToolTip.Tip="新建序列 (Ctrl+N)">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Data="{StaticResource IconPlus}" Width="14" Height="14" />
+              <TextBlock Text="新建" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Name="SaveButton" Classes="ghost" Click="Save_OnClick" ToolTip.Tip="保存文件 (Ctrl+S)">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Data="{StaticResource IconSave}" Width="14" Height="14" />
+              <TextBlock Text="保存" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Name="SaveAsButton" Classes="ghost" Click="SaveAs_OnClick" ToolTip.Tip="另存为 (Ctrl+Shift+S)">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Data="{StaticResource IconSaveAs}" Width="14" Height="14" />
+              <TextBlock Text="另存" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Name="DeleteSequenceButton" Classes="danger" Click="DeleteSequence_OnClick" ToolTip.Tip="删除当前序列">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Data="{StaticResource IconDelete}" Width="14" Height="14" />
+              <TextBlock Text="删除" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Name="RunButton" Classes="success" MinWidth="96" Click="Run_OnClick" ToolTip.Tip="执行完整测试序列 (F5)">
+            <StackPanel Name="RunButtonContent" Orientation="Horizontal" Spacing="6">
+              <PathIcon Name="RunButtonIcon" Data="{StaticResource IconRun}" Width="14" Height="14" Foreground="#FFFFFF" />
+              <TextBlock Name="RunButtonText" Text="运行" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Name="ThemeToggleButton" Classes="ghost" MinWidth="36" Padding="8,6" Click="ThemeToggle_OnClick" ToolTip.Tip="切换明暗主题">
+            <PathIcon Name="ThemeToggleIcon" Data="{StaticResource IconMoon}" Width="15" Height="15" />
+          </Button>
         </StackPanel>
       </Grid>
     </Border>
@@ -48,15 +84,21 @@
         <ColumnDefinition Width="300*" MinWidth="240" />
       </Grid.ColumnDefinitions>
 
+      <!-- 左侧：序列结构树 -->
       <Border Classes="card" Grid.Column="0">
         <Grid RowDefinitions="Auto,Auto,*">
-          <TextBlock Classes="section-title" Text="序列结构" />
-          <StackPanel Grid.Row="1">
-            <TextBlock Classes="form-label" Text="名称" />
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <PathIcon Data="{StaticResource IconFolder}" Width="16" Height="16" Foreground="{DynamicResource AppAccentBrush}" />
+            <TextBlock Classes="section-title" Text="序列结构" />
+          </StackPanel>
+          
+          <StackPanel Grid.Row="1" Margin="0,8,0,0">
+            <TextBlock Classes="form-label" Text="序列名称" />
             <TextBox Name="SequenceNameBox" TextChanged="SequenceNameBox_OnTextChanged" />
           </StackPanel>
+          
           <Grid Grid.Row="2" RowDefinitions="*,Auto" Margin="0,10,0,0">
-            <TreeView Name="SequenceTree" input:DragDrop.AllowDrop="True"
+            <TreeView Name="SequenceTree" Background="Transparent" input:DragDrop.AllowDrop="True"
                       SelectionChanged="SequenceTree_OnSelectionChanged"
                       DoubleTapped="SequenceTree_OnDoubleTapped"
                       KeyDown="SequenceTree_OnKeyDown"
@@ -81,36 +123,67 @@
               </TreeView.Styles>
               <TreeView.ItemTemplate>
                 <TreeDataTemplate ItemsSource="{Binding Children}">
-                  <TextBlock Text="{Binding Title}" />
+                  <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,2"
+                        Opacity="{Binding IsDisabled, Converter={x:Static converters:DisabledOpacityConverter.Instance}}">
+                    <PathIcon Grid.Column="0" Data="{Binding IconData}" Width="15" Height="15"
+                              Foreground="{DynamicResource AppAccentBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBlock Grid.Column="1" Text="{Binding DisplayName}" VerticalAlignment="Center"
+                               FontWeight="Medium" />
+                    <Border Grid.Column="2" IsVisible="{Binding BadgeText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                            Background="{DynamicResource AppBadgeBackgroundBrush}" CornerRadius="10" Padding="8,2" Margin="6,0,0,0">
+                      <TextBlock Text="{Binding BadgeText}" FontSize="11" Foreground="{DynamicResource AppSubtleTextBrush}" />
+                    </Border>
+                  </Grid>
                 </TreeDataTemplate>
               </TreeView.ItemTemplate>
             </TreeView>
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
-              <Button Content="添加测试项" Click="AddItem_OnClick" />
-              <Button Content="删除测试项" Click="DeleteItem_OnClick" />
+            
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,10,0,0">
+              <Button Click="AddItem_OnClick">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <PathIcon Data="{StaticResource IconPlus}" Width="12" Height="12" />
+                  <TextBlock Text="添加测试项" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
+              <Button Classes="danger" Click="DeleteItem_OnClick">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <PathIcon Data="{StaticResource IconDelete}" Width="12" Height="12" />
+                  <TextBlock Text="删除测试项" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
             </StackPanel>
           </Grid>
         </Grid>
       </Border>
 
       <GridSplitter Grid.Column="1" Width="10" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" />
+      <Border Grid.Column="1" Width="1" Background="{DynamicResource AppCardBorderBrush}" IsHitTestVisible="False" />
 
+      <!-- 中间：测试项与 Step 配置 -->
       <Border Classes="card" Grid.Column="2">
         <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
           <Grid RowDefinitions="Auto,Auto,Auto">
             <Grid ColumnDefinitions="*,Auto">
               <StackPanel>
-                <TextBlock Classes="section-title" Text="测试项" />
-                <TextBox Name="ItemNameBox" Margin="0,6,0,0" TextChanged="ItemNameBox_OnTextChanged" />
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                  <PathIcon Data="{StaticResource IconItem}" Width="16" Height="16" Foreground="{DynamicResource AppAccentBrush}" />
+                  <TextBlock Classes="section-title" Text="测试项详情" />
+                </StackPanel>
+                <TextBox Name="ItemNameBox" Margin="0,8,0,0" TextChanged="ItemNameBox_OnTextChanged" />
               </StackPanel>
-              <CheckBox Grid.Column="1" Name="ItemEnabledBox" Content="启用" Margin="12,0,0,0"
-                        VerticalAlignment="Bottom" IsCheckedChanged="ItemEnabledBox_OnChanged" />
+              <CheckBox Grid.Column="1" Name="ItemEnabledBox" Content="启用测试项" Margin="12,0,0,0"
+                        VerticalAlignment="Bottom" IsCheckedChanged="ItemEnabledBox_OnChanged" FontWeight="SemiBold" />
             </Grid>
 
-            <Border Classes="inner" Grid.Row="1" Margin="0,12,0,0">
+            <!-- 判定设置卡片 -->
+            <Border Classes="inner" Grid.Row="1" Margin="0,14,0,0">
               <Grid RowDefinitions="Auto,Auto,Auto">
-                <TextBlock Classes="hint" FontWeight="SemiBold" Text="判定设置" />
-                <Grid Grid.Row="1" ColumnDefinitions="*,*" Margin="0,2,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <PathIcon Data="{StaticResource IconEdit}" Width="14" Height="14" Foreground="{DynamicResource AppAccentBrush}" />
+                  <TextBlock Classes="hint" FontWeight="Bold" Text="判定设置" />
+                </StackPanel>
+                
+                <Grid Grid.Row="1" ColumnDefinitions="*,*" Margin="0,6,0,0">
                   <StackPanel Margin="0,0,6,0">
                     <TextBlock Classes="form-label" Text="判定 Step" />
                     <ComboBox Name="VerdictStepCombo" HorizontalAlignment="Stretch" SelectionChanged="VerdictStepCombo_OnSelectionChanged">
@@ -123,20 +196,21 @@
                   </StackPanel>
                   <StackPanel Grid.Column="1" Margin="6,0,0,0">
                     <TextBlock Classes="form-label" Text="判定输出键" />
-                    <TextBox Name="VerdictOutputBox" PlaceholderText="可选" TextChanged="VerdictOutputBox_OnTextChanged" />
+                    <TextBox Name="VerdictOutputBox" PlaceholderText="可选（默认使用 Step 返回值）" TextChanged="VerdictOutputBox_OnTextChanged" />
                   </StackPanel>
                 </Grid>
-                <StackPanel Grid.Row="2" Margin="0,2,0,0">
-                  <StackPanel Width="150">
+                
+                <StackPanel Grid.Row="2" Margin="0,6,0,0">
+                  <StackPanel Width="160">
                     <TextBlock Classes="form-label" Text="判定类型" />
                     <ComboBox Name="VerdictTypeCombo" HorizontalAlignment="Stretch" SelectionChanged="VerdictTypeCombo_OnSelectionChanged" />
                   </StackPanel>
-                  <WrapPanel Name="NumericJudgePanel" Orientation="Horizontal">
-                    <StackPanel Width="90" Margin="0,0,8,0">
+                  <WrapPanel Name="NumericJudgePanel" Orientation="Horizontal" Margin="0,4,0,0">
+                    <StackPanel Width="100" Margin="0,0,8,0">
                       <TextBlock Classes="form-label" Text="下限" />
                       <TextBox Name="NumericLowerBox" TextChanged="NumericLowerBox_OnTextChanged" />
                     </StackPanel>
-                    <StackPanel Width="90" Margin="0,0,8,0">
+                    <StackPanel Width="100" Margin="0,0,8,0">
                       <TextBlock Classes="form-label" Text="上限" />
                       <TextBox Name="NumericUpperBox" TextChanged="NumericUpperBox_OnTextChanged" />
                     </StackPanel>
@@ -146,10 +220,10 @@
                     </StackPanel>
                     <StackPanel Width="110">
                       <TextBlock Classes="form-label" Text="判定单位" />
-                      <TextBox Name="NumericUnitBox" PlaceholderText="如 V" TextChanged="NumericUnitBox_OnTextChanged" />
+                      <TextBox Name="NumericUnitBox" PlaceholderText="如 V / mA" TextChanged="NumericUnitBox_OnTextChanged" />
                     </StackPanel>
                   </WrapPanel>
-                  <Grid Name="StringJudgePanel" ColumnDefinitions="128,*">
+                  <Grid Name="StringJudgePanel" ColumnDefinitions="140,*" Margin="0,4,0,0">
                     <StackPanel Margin="0,0,8,0">
                       <TextBlock Classes="form-label" Text="匹配方式" />
                       <ComboBox Name="StringModeCombo" HorizontalAlignment="Stretch" SelectionChanged="StringModeCombo_OnSelectionChanged" />
@@ -163,13 +237,24 @@
               </Grid>
             </Border>
 
-            <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,12,0,0">
-              <TextBlock Classes="hint" FontWeight="SemiBold" Text="Step 管理" />
-              <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,6,0,0">
-                <TextBlock Classes="hint" Text="选择“添加 Step”以打开插件分类列表。" VerticalAlignment="Center" />
-                <Button Grid.Column="1" Content="添加 Step" MinWidth="88" Margin="8,0,0,0" Click="AddStep_OnClick" />
+            <!-- Step 管理区 -->
+            <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto" Margin="0,14,0,0">
+              <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <PathIcon Data="{StaticResource IconStep}" Width="14" Height="14" Foreground="{DynamicResource AppAccentBrush}" />
+                <TextBlock Classes="hint" FontWeight="Bold" Text="Step 管理" />
+              </StackPanel>
+              
+              <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+                <TextBlock Classes="hint" Text="选择“添加 Step”选择可用插件或在树中双击节点进行编辑。" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="accent" Click="AddStep_OnClick" ToolTip.Tip="添加新步骤">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Data="{StaticResource IconPlus}" Width="14" Height="14" Foreground="#FFFFFF" />
+                    <TextBlock Text="添加 Step" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Button>
               </Grid>
-              <Border Classes="inner" Grid.Row="2" Margin="0,10,0,0" Padding="10,8">
+              
+              <Border Classes="inner" Grid.Row="2" Margin="0,10,0,0" Padding="12,10">
                 <TextBlock Name="TreeSelectionText" Classes="hint" TextWrapping="Wrap" />
               </Border>
             </Grid>
@@ -178,45 +263,84 @@
       </Border>
 
       <GridSplitter Grid.Column="3" Width="10" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" />
+      <Border Grid.Column="3" Width="1" Background="{DynamicResource AppCardBorderBrush}" IsHitTestVisible="False" />
 
+      <!-- 右侧：全局变量列表 -->
       <Border Classes="card" Grid.Column="4">
         <Grid RowDefinitions="Auto,*,Auto">
-          <TextBlock Classes="section-title" Text="变量" />
-          <ListBox Grid.Row="1" Name="VariablesList" Margin="0,8,0,0" SelectionChanged="VariablesList_OnSelectionChanged">
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <PathIcon Data="{StaticResource IconVariable}" Width="16" Height="16" Foreground="{DynamicResource AppAccentBrush}" />
+            <TextBlock Classes="section-title" Text="全局变量" />
+          </StackPanel>
+          
+          <ListBox Grid.Row="1" Name="VariablesList" Background="Transparent" Margin="0,10,0,0" SelectionChanged="VariablesList_OnSelectionChanged">
             <ListBox.ItemTemplate>
               <DataTemplate>
-                <StackPanel Margin="0,2">
-                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                  <TextBlock Classes="hint" Text="{Binding ValueText}" />
-                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto" Margin="0,3">
+                  <TextBlock Grid.Column="0" Text="{Binding Name}" FontFamily="Consolas, Cascadia Code, Monospace" FontWeight="Bold" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Classes="hint" Text="{Binding ValueText}" VerticalAlignment="Center" />
+                </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
-          <StackPanel Grid.Row="2">
-            <TextBlock Classes="form-label" Text="名称" />
+          
+          <StackPanel Grid.Row="2" Margin="0,10,0,0">
+            <TextBlock Classes="form-label" Text="变量名" />
             <TextBox Name="VariableNameBox" TextChanged="VariableNameBox_OnTextChanged" />
-            <TextBlock Classes="form-label" Text="值" />
+            <TextBlock Classes="form-label" Text="默认值" />
             <TextBox Name="VariableValueBox" TextChanged="VariableValueBox_OnTextChanged" />
-            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,10,0,0">
-              <Button Content="添加" Click="AddVariable_OnClick" />
-              <Button Content="删除" Click="DeleteVariable_OnClick" />
+            
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+              <Button Click="AddVariable_OnClick">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <PathIcon Data="{StaticResource IconPlus}" Width="12" Height="12" />
+                  <TextBlock Text="添加" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
+              <Button Classes="danger" Click="DeleteVariable_OnClick">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <PathIcon Data="{StaticResource IconDelete}" Width="12" Height="12" />
+                  <TextBlock Text="删除" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
             </StackPanel>
           </StackPanel>
         </Grid>
       </Border>
     </Grid>
 
-    <!-- 日志分隔条：拖动可调整主编辑区与日志区的高度 -->
+    <!-- 日志分隔条 -->
     <GridSplitter Grid.Row="2" Height="10" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" />
+    <Border Grid.Row="2" Height="1" Background="{DynamicResource AppCardBorderBrush}" IsHitTestVisible="False" />
 
-    <!-- 执行日志 -->
-    <Border Classes="card" Grid.Row="3" Padding="12,10">
+    <!-- 底部：执行日志控制台 -->
+    <Border Classes="card" Grid.Row="3" Padding="14,10">
       <Grid RowDefinitions="Auto,*">
-        <Grid ColumnDefinitions="Auto,*">
-          <TextBlock Classes="section-title" Text="执行日志" />
-          <TextBlock Grid.Column="1" Classes="hint" Text="运行输出与校验信息"
-                     VerticalAlignment="Center" HorizontalAlignment="Right" />
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <PathIcon Data="{StaticResource IconLog}" Width="16" Height="16" Foreground="{DynamicResource AppAccentBrush}" />
+            <TextBlock Classes="section-title" Text="执行日志" />
+          </StackPanel>
+          
+          <TextBlock Grid.Column="1" Classes="hint" Text="实时运行输出与校验信息"
+                     VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,12,0" />
+                     
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+            <Button Classes="ghost" Click="CopyLog_OnClick" ToolTip.Tip="复制日志">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <PathIcon Data="{StaticResource IconCopy}" Width="12" Height="12" />
+                <TextBlock Text="复制" VerticalAlignment="Center" FontSize="12" />
+              </StackPanel>
+            </Button>
+            <Button Classes="ghost" Click="ClearLog_OnClick" ToolTip.Tip="清空日志">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <PathIcon Data="{StaticResource IconClear}" Width="12" Height="12" />
+                <TextBlock Text="清空" VerticalAlignment="Center" FontSize="12" />
+              </StackPanel>
+            </Button>
+          </StackPanel>
         </Grid>
+
         <TextBox Grid.Row="1" Name="LogBox" Classes="log" Margin="0,8,0,0"
                  IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
                  ScrollViewer.VerticalScrollBarVisibility="Auto" />

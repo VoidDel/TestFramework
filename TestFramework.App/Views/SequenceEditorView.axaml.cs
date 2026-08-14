@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia;
+using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
@@ -111,6 +112,24 @@ public sealed partial class SequenceEditorView : UserControl
     internal SequenceEditorView(string sequenceDirectory, string resultDirectory)
     {
         InitializeComponent();
+
+        // TreeViewItem handles pointer presses while selecting a node. Listen on the
+        // tunnel route so the drag source is captured before that happens.
+        SequenceTree.AddHandler(
+            InputElement.PointerPressedEvent,
+            SequenceTree_OnPointerPressed,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        SequenceTree.AddHandler(
+            InputElement.PointerMovedEvent,
+            SequenceTree_OnPointerMoved,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        SequenceTree.AddHandler(
+            InputElement.PointerReleasedEvent,
+            SequenceTree_OnPointerReleased,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
 
         RegisterPlugins();
         RegisterSettingsEditors();

@@ -1,6 +1,9 @@
 using System.Reflection;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.VisualTree;
 using TestFramework.Abstractions.Models;
 using TestFramework.App.Views;
 using Xunit;
@@ -67,6 +70,60 @@ public sealed class SequenceEditorViewTests
                 var builtIn = Assert.Single(categories, category => category.Title == "内置");
                 Assert.Equal(4, builtIn.Children.Count);
                 Assert.All(builtIn.Children, plugin => Assert.NotNull(plugin.Plugin));
+            }, CancellationToken.None);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task PointerPressOnTreeViewItem_CapturesDragSourceBeforeSelectionHandlesEvent()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
+        using var session = HeadlessUnitTestSession.StartNew(typeof(App));
+        try
+        {
+            await session.Dispatch(() =>
+            {
+                var view = new SequenceEditorView(Path.Combine(root, "sequences"), Path.Combine(root, "results"));
+                var window = new Window
+                {
+                    Width = 1400,
+                    Height = 900,
+                    Content = view
+                };
+                window.Show();
+
+                var sequenceTree = view.FindControl<TreeView>("SequenceTree")!;
+                var rootItem = Assert.IsType<TreeViewItem>(sequenceTree.ContainerFromIndex(0));
+                rootItem.IsExpanded = true;
+                window.GetLayoutManager()?.ExecuteLayoutPass();
+                var treeItem = sequenceTree
+                    .GetVisualDescendants()
+                    .OfType<TreeViewItem>()
+                    .First(item => item.DataContext is SequenceEditorView.SequenceTreeNode
+                    {
+                        Kind: SequenceEditorView.TreeNodeKind.Item
+                    });
+                var point = treeItem.TranslatePoint(
+                    new Point(treeItem.Bounds.Width / 2, treeItem.Bounds.Height / 2),
+                    window);
+                Assert.NotNull(point);
+
+                window.MouseDown(point.Value, MouseButton.Left, RawInputModifiers.None);
+
+                Assert.NotNull(GetPrivateField(view, "_dragStartEvent"));
+                var dragSource = Assert.IsType<SequenceEditorView.SequenceTreeNode>(
+                    GetPrivateField(view, "_dragSourceNode"));
+                Assert.Equal(SequenceEditorView.TreeNodeKind.Item, dragSource.Kind);
+
+                window.MouseUp(point.Value, MouseButton.Left, RawInputModifiers.None);
+                window.Close();
             }, CancellationToken.None);
         }
         finally

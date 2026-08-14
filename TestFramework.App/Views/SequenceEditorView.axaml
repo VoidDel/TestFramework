@@ -59,9 +59,6 @@
             <TreeView Name="SequenceTree" input:DragDrop.AllowDrop="True"
                       SelectionChanged="SequenceTree_OnSelectionChanged"
                       DoubleTapped="SequenceTree_OnDoubleTapped"
-                      PointerPressed="SequenceTree_OnPointerPressed"
-                      PointerMoved="SequenceTree_OnPointerMoved"
-                      PointerReleased="SequenceTree_OnPointerReleased"
                       KeyDown="SequenceTree_OnKeyDown"
                       input:DragDrop.DragOver="SequenceTree_OnDragOver"
                       input:DragDrop.Drop="SequenceTree_OnDrop">

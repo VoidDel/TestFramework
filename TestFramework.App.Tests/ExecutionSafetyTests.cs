@@ -96,7 +96,7 @@ public sealed class ExecutionSafetyTests
     {
         public ResourcePluginDescriptor Descriptor { get; } = new() { PluginId = "instrument", DisplayName = "Instrument", Version = new(1, 0, 0) };
         public Type InstrumentType => typeof(TrackedResource);
-        public Task<object> CreateAsync(InstrumentDefinition definition, RuntimeResourceProvider resources, CancellationToken cancellationToken)
+        public Task<object> CreateAsync(InstrumentDefinition definition, IResourceScope resources, CancellationToken cancellationToken)
             => Task.FromResult<object>(resource);
     }
 

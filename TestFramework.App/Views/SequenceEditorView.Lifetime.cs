@@ -9,6 +9,7 @@ public sealed partial class SequenceEditorView
     internal enum UnsavedChangesChoice { Cancel, SaveAll, Discard }
 
     internal Func<IReadOnlyList<SequenceDocument>, Task<UnsavedChangesChoice>>? UnsavedChangesPrompt { get; set; }
+    internal Func<SequenceDocument, Task<bool>>? DeleteSequencePrompt { get; set; }
     private Window? _ownerWindow;
     private bool _closePromptOpen;
     private bool _closeApproved;
@@ -69,11 +70,11 @@ public sealed partial class SequenceEditorView
         if (_currentDocument?.IsDirty == true && !ValidateForSaveOrRun()) return false;
         foreach (var document in dirtyDocuments)
         {
-            var issues = _validator.Validate(document.Sequence);
-            if (issues.Count > 0)
+            var errors = _validator.Validate(document.Sequence).Where(issue => issue.IsError).ToArray();
+            if (errors.Length > 0)
             {
                 SetStatus($"序列“{document.Sequence.Name}”校验失败，无法保存。", StatusKind.Error);
-                foreach (var issue in issues) AppendLog(issue.ToString());
+                foreach (var issue in errors) AppendLog(issue.ToString());
                 return false;
             }
         }
@@ -99,6 +100,42 @@ public sealed partial class SequenceEditorView
         _isDirty = _currentDocument?.IsDirty ?? false;
         UpdateWindowTitle();
         return path;
+    }
+
+    internal Task<bool> ConfirmDeleteSequenceAsync(SequenceDocument document)
+    {
+        if (DeleteSequencePrompt is not null) return DeleteSequencePrompt(document);
+        if (_ownerWindow is null) return Task.FromResult(false);
+
+        var dialog = new Window
+        {
+            Title = "删除测试序列",
+            Width = 440,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, HorizontalAlignment = HorizontalAlignment.Right };
+        foreach (var (text, choice) in new[] { ("删除", true), ("取消", false) })
+        {
+            var button = new Button { Content = text };
+            button.Click += (_, _) => dialog.Close(choice);
+            buttons.Children.Add(button);
+        }
+
+        var target = string.IsNullOrWhiteSpace(document.FilePath)
+            ? $"序列“{document.Sequence.Name}”尚未保存到文件。"
+            : $"将永久删除文件：\n{document.FilePath}\n\n此操作不可撤销，文件不会进入回收站。";
+        dialog.Content = new StackPanel
+        {
+            Margin = new Avalonia.Thickness(20), Spacing = 20,
+            Children =
+            {
+                new TextBlock { Text = target, TextWrapping = Avalonia.Media.TextWrapping.Wrap },
+                buttons
+            }
+        };
+        return dialog.ShowDialog<bool>(_ownerWindow);
     }
 
     private Task<UnsavedChangesChoice> ShowUnsavedChangesPromptAsync(IReadOnlyList<SequenceDocument> documents)

@@ -51,6 +51,62 @@ public sealed class RuntimeResourceTests
     }
 
     [Fact]
+    public async Task BuildAsync_PluginReadsAnEarlierResourceThroughTheReadOnlyScope()
+    {
+        // A transport routinely needs the instrument it sits on. The scope must let it read that,
+        // while giving it no way to register into, or dispose, the host's container.
+        var registry = new ResourcePluginRegistry();
+        registry.RegisterInstrumentDriver(new NamedInstrumentPlugin());
+        registry.RegisterTransport(new InstrumentBackedTransportPlugin());
+
+        var sequence = new TestSequence
+        {
+            Instruments = [new InstrumentDefinition { Id = "dmm", DriverId = "demo.instrument", DriverVersion = "1.0.0" }],
+            Transports = [new TransportDefinition { Id = "bus", TransportId = "demo.transport", TransportVersion = "1.0.0", Channel = "dmm" }]
+        };
+
+        await using var resources = await new RuntimeResourceBuilder(registry).BuildAsync(sequence);
+
+        Assert.True(((ITransportProvider)resources).TryGet<string>("bus", out var transport));
+        Assert.Equal("transport-over:dmm-instrument", transport);
+    }
+
+    private sealed class NamedInstrumentPlugin : IInstrumentDriverPlugin
+    {
+        public ResourcePluginDescriptor Descriptor { get; } = new()
+        {
+            PluginId = "demo.instrument",
+            DisplayName = "demo.instrument",
+            Version = new Version(1, 0, 0)
+        };
+
+        public Type InstrumentType => typeof(string);
+
+        public Task<object> CreateAsync(InstrumentDefinition definition, IResourceScope resources, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<object>("dmm-instrument");
+        }
+    }
+
+    private sealed class InstrumentBackedTransportPlugin : ITransportPlugin
+    {
+        public ResourcePluginDescriptor Descriptor { get; } = new()
+        {
+            PluginId = "demo.transport",
+            DisplayName = "demo.transport",
+            Version = new Version(1, 0, 0)
+        };
+
+        public Type TransportType => typeof(string);
+
+        public Task<object> CreateAsync(TransportDefinition definition, IResourceScope resources, CancellationToken cancellationToken)
+        {
+            var instrument = resources.Instruments.GetRequired<string>(definition.Channel!);
+            return Task.FromResult<object>($"transport-over:{instrument}");
+        }
+    }
+
+    [Fact]
     public async Task BuildAsync_DisposesCreatedResourcesWhenLaterResourceFails()
     {
         var disposable = new DisposableResource();
@@ -144,7 +200,7 @@ public sealed class RuntimeResourceTests
     {
         public ResourcePluginDescriptor Descriptor { get; } = new() { PluginId = "failing.transport", DisplayName = "Fail", Version = new(1, 0, 0) };
         public Type TransportType => typeof(object);
-        public Task<object> CreateAsync(TransportDefinition definition, RuntimeResourceProvider resources, CancellationToken cancellationToken)
+        public Task<object> CreateAsync(TransportDefinition definition, IResourceScope resources, CancellationToken cancellationToken)
             => throw new InvalidOperationException("creation failed");
     }
 
@@ -192,7 +248,7 @@ public sealed class RuntimeResourceTests
 
         public Task<object> CreateAsync(
             InstrumentDefinition definition,
-            RuntimeResourceProvider resources,
+            IResourceScope resources,
             CancellationToken cancellationToken)
         {
             CreateCount++;

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using Avalonia;
 using Avalonia.Controls;
@@ -55,6 +56,7 @@ public sealed partial class SequenceEditorView : UserControl
         Info,
         Running,
         Success,
+        Warning,
         Error
     }
 
@@ -159,7 +161,7 @@ public sealed partial class SequenceEditorView : UserControl
         _documentStore = new SequenceDocumentStore(_yamlService, sequenceDirectory, CreateDefaultSequence);
         _runService = new SequenceRunService(_pluginRegistry, _resourcePluginRegistry);
         _resultStore = new TestResultStore(resultDirectory);
-        _validator = new TestSequenceValidator(_pluginRegistry);
+        _validator = new TestSequenceValidator(_pluginRegistry, _resourcePluginRegistry);
 
 
         VerdictTypeCombo.ItemsSource = new[]
@@ -226,23 +228,17 @@ public sealed partial class SequenceEditorView : UserControl
         RegisterBuiltInPlugin(new ThrowStepPlugin());
 
         var pluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins");
-        var loader = new PluginLoader(_pluginRegistry);
-        var report = loader.LoadFromDirectoryWithReport(pluginDirectory);
-        foreach (var plugin in report.LoadedPlugins)
+        var report = new PluginDirectoryLoader(_pluginRegistry, _resourcePluginRegistry).LoadFromDirectory(pluginDirectory);
+
+        foreach (var plugin in report.StepPlugins)
         {
             _pluginCategories[plugin] = GetPluginCategory(pluginDirectory, report.PluginPaths[plugin]);
         }
 
-        RegisterSettingsEditors(report.LoadedPlugins);
+        RegisterSettingsEditors(report.StepPlugins);
         foreach (var failure in report.Failures)
         {
             AppendLog($"插件加载失败：{failure.AssemblyPath} - {failure.Message}");
-        }
-
-        var resourceReport = new ResourcePluginLoader(_resourcePluginRegistry).LoadFromDirectory(pluginDirectory);
-        foreach (var failure in resourceReport.Failures)
-        {
-            AppendLog($"资源插件加载失败：{failure.AssemblyPath} - {failure.Message}");
         }
     }
 
@@ -747,23 +743,66 @@ public sealed partial class SequenceEditorView : UserControl
         return comboBox.SelectedItem is Option<T> option ? option.Value : default;
     }
 
+    /// <summary>Upper bound on retained log characters; see <see cref="AppendLog"/>.</summary>
+    private const int MaxLogLength = 256 * 1024;
+
+    private readonly System.Text.StringBuilder _logBuffer = new();
+
+    /// <summary>
+    /// Appends one log line. The text is accumulated in a buffer and trimmed to
+    /// <see cref="MaxLogLength"/>: reading and re-assigning <c>LogBox.Text</c> per line is
+    /// quadratic in the log size and grows without bound over a long run, which starves the UI
+    /// thread exactly when a long sequence is producing the most events.
+    /// </summary>
     private void AppendLog(string message)
     {
-        LogBox.Text += $"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}";
-        LogBox.CaretIndex = LogBox.Text?.Length ?? 0;
+        _logBuffer.Append(CultureInfo.CurrentCulture, $"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
+        TrimLogBuffer();
+        LogBox.Text = _logBuffer.ToString();
+        LogBox.CaretIndex = _logBuffer.Length;
+    }
+
+    private void TrimLogBuffer()
+    {
+        if (_logBuffer.Length <= MaxLogLength)
+        {
+            return;
+        }
+
+        // Drop whole lines from the front so the remaining text stays readable.
+        var cut = _logBuffer.Length - MaxLogLength;
+        while (cut < _logBuffer.Length && _logBuffer[cut] != '\n')
+        {
+            cut++;
+        }
+
+        _logBuffer.Remove(0, Math.Min(cut + 1, _logBuffer.Length));
+    }
+
+    private void ResetLog()
+    {
+        _logBuffer.Clear();
+        LogBox.Text = string.Empty;
     }
 
     private void ClearLog_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        LogBox.Text = string.Empty;
+        ResetLog();
     }
 
     private async void CopyLog_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard && !string.IsNullOrEmpty(LogBox.Text))
+        try
         {
-            await clipboard.SetTextAsync(LogBox.Text);
-            SetStatus("已复制日志到剪贴板。");
+            if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard && !string.IsNullOrEmpty(LogBox.Text))
+            {
+                await clipboard.SetTextAsync(LogBox.Text);
+                SetStatus("已复制日志到剪贴板。");
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("复制日志失败", ex);
         }
     }
 
@@ -778,17 +817,29 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         var issues = _validator.Validate(_sequence);
-        if (issues.Count == 0)
+        var errors = issues.Where(issue => issue.IsError).ToArray();
+        var warnings = issues.Where(issue => !issue.IsError).ToArray();
+
+        // Warnings are reported but never block. A plugin version that will be substituted is worth
+        // telling the operator about; refusing to run over it would be worse than the substitution.
+        foreach (var warning in warnings)
         {
-            SetStatus("校验通过。", StatusKind.Success);
+            AppendLog("  警告：" + warning.Message);
+        }
+
+        if (errors.Length == 0)
+        {
+            SetStatus(
+                warnings.Length == 0 ? "校验通过。" : $"校验通过，{warnings.Length} 个警告。",
+                warnings.Length == 0 ? StatusKind.Success : StatusKind.Warning);
             return true;
         }
 
-        SetStatus($"校验失败：{issues.Count} 个问题。", StatusKind.Error);
+        SetStatus($"校验失败：{errors.Length} 个问题。", StatusKind.Error);
         AppendLog("校验失败：");
-        foreach (var issue in issues)
+        foreach (var issue in errors)
         {
-            AppendLog("  " + issue);
+            AppendLog("  " + issue.Message);
         }
 
         return false;
@@ -861,7 +912,7 @@ public sealed partial class SequenceEditorView : UserControl
         AppendLog($"已保存：{document.FilePath}");
     }
 
-    private void DeleteSequence_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void DeleteSequence_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_currentDocument is null)
         {
@@ -871,6 +922,14 @@ public sealed partial class SequenceEditorView : UserControl
         try
         {
             var removed = _currentDocument;
+
+            // Deleting removes the file outright - it does not go to the recycle bin - so it is
+            // confirmed like the unsaved-changes prompt rather than acting on a single click.
+            if (!await ConfirmDeleteSequenceAsync(removed))
+            {
+                return;
+            }
+
             if (_documentStore.DeleteFile(removed))
             {
                 AppendLog($"已删除测试序列文件：{removed.FilePath}");
@@ -905,7 +964,7 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        LogBox.Text = string.Empty;
+        ResetLog();
         var runCancellation = new CancellationTokenSource();
         _runCts = runCancellation;
         SetRunningState(true);
@@ -1065,6 +1124,18 @@ public sealed partial class SequenceEditorView : UserControl
 
     private async void AddStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        try
+        {
+            await AddStepAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("添加步骤失败", ex);
+        }
+    }
+
+    private async Task AddStepAsync()
+    {
         if (SequenceTree.SelectedItem is SequenceTreeNode node)
         {
             ApplyTreeSelection(node);
@@ -1108,12 +1179,19 @@ public sealed partial class SequenceEditorView : UserControl
 
     private async void EditStep_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (SequenceTree.SelectedItem is SequenceTreeNode node)
+        try
         {
-            ApplyTreeSelection(node);
-        }
+            if (SequenceTree.SelectedItem is SequenceTreeNode node)
+            {
+                ApplyTreeSelection(node);
+            }
 
-        await OpenSelectedStepEditorAsync();
+            await OpenSelectedStepEditorAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("打开步骤编辑器失败", ex);
+        }
     }
 
     private async Task OpenSelectedStepEditorAsync()
@@ -1154,7 +1232,17 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         var index = steps.IndexOf(_selectedStep);
-        var copy = _selectedStep.Clone();
+        TestStepDefinition copy;
+        try
+        {
+            copy = _selectedStep.Clone();
+        }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("复制步骤失败", ex);
+            return;
+        }
+
         steps.Insert(index + 1, copy);
         _selectedStep = copy;
         MarkDirty();
@@ -1286,10 +1374,17 @@ public sealed partial class SequenceEditorView : UserControl
 
     private async void SequenceTree_OnDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
     {
-        if (SequenceTree.SelectedItem is SequenceTreeNode { Kind: TreeNodeKind.Step } node)
+        try
         {
-            ApplyTreeSelection(node);
-            await OpenSelectedStepEditorAsync();
+            if (SequenceTree.SelectedItem is SequenceTreeNode { Kind: TreeNodeKind.Step } node)
+            {
+                ApplyTreeSelection(node);
+                await OpenSelectedStepEditorAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("打开步骤编辑器失败", ex);
         }
     }
 
@@ -1337,6 +1432,10 @@ public sealed partial class SequenceEditorView : UserControl
                 data,
                 DragDropEffects.Move | DragDropEffects.Copy);
         }
+        catch (Exception ex)
+        {
+            ReportOperationFailure("拖拽失败", ex);
+        }
         finally
         {
             _dragInProgress = false;
@@ -1373,13 +1472,23 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        if (source.Node.Kind == TreeNodeKind.Item)
+        // A Ctrl+drag copy clones the step, and cloning rejects parameter values it cannot copy
+        // safely - a plugin is free to put such a value in Parameters, so this must not escape the
+        // handler and take the process down.
+        try
         {
-            MoveOrCopyItem(source, target);
+            if (source.Node.Kind == TreeNodeKind.Item)
+            {
+                MoveOrCopyItem(source, target);
+            }
+            else
+            {
+                MoveOrCopyStep(source, target);
+            }
         }
-        else
+        catch (Exception ex)
         {
-            MoveOrCopyStep(source, target);
+            ReportOperationFailure("拖拽失败", ex);
         }
     }
 
@@ -1718,7 +1827,7 @@ public sealed partial class SequenceEditorView : UserControl
         StatusText.Text = text;
         var resourceKey = kind switch
         {
-            StatusKind.Running => "AppWarningBrush",
+            StatusKind.Running or StatusKind.Warning => "AppWarningBrush",
             StatusKind.Success => "AppSuccessBrush",
             StatusKind.Error => "AppDangerBrush",
             _ => "AppAccentBrush"

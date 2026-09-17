@@ -6,3 +6,6 @@ obj/
 *.suo
 TestResults/
 ConsoleApp1/
+.serena/
+*.nupkg
+results/

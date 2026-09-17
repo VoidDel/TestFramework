@@ -1,11 +1,13 @@
 using Avalonia.Controls;
+using TestFramework.Abstractions.Plugins;
 using TestFramework.Plugin.Abstractions.UI;
 
 namespace TestFramework.App.Services;
 
 public sealed class PluginSettingsEditorRegistry
 {
-    private readonly Dictionary<EditorKey, Func<object, ISettingsEditContext, Control>> _factories = new();
+    private readonly Dictionary<string, Dictionary<Version, Func<object, ISettingsEditContext, Control>>> _factories =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public void Register(
         string pluginId,
@@ -16,9 +18,20 @@ public sealed class PluginSettingsEditorRegistry
         ArgumentNullException.ThrowIfNull(version);
         ArgumentNullException.ThrowIfNull(factory);
 
-        _factories[new EditorKey(pluginId, version)] = factory;
+        if (!_factories.TryGetValue(pluginId, out var versions))
+        {
+            versions = [];
+            _factories[pluginId] = versions;
+        }
+
+        versions[version] = factory;
     }
 
+    /// <summary>
+    /// Finds the editor for a step's plugin reference using the same version rule as the runner
+    /// (<see cref="PluginVersionPolicy"/>). Matching exactly here while the runner substitutes a
+    /// compatible version would make the editor silently vanish for a step that still runs.
+    /// </summary>
     public bool TryCreateEditor(
         string pluginId,
         string? version,
@@ -27,19 +40,14 @@ public sealed class PluginSettingsEditorRegistry
         out Control editor)
     {
         editor = null!;
-        if (!Version.TryParse(version, out var parsedVersion))
+        if (string.IsNullOrWhiteSpace(pluginId) ||
+            !_factories.TryGetValue(pluginId, out var versions) ||
+            !PluginVersionPolicy.TrySelect(versions.Keys, version, out var selected, out _))
         {
             return false;
         }
 
-        if (!_factories.TryGetValue(new EditorKey(pluginId, parsedVersion), out var factory))
-        {
-            return false;
-        }
-
-        editor = factory(settings, context);
+        editor = versions[selected](settings, context);
         return true;
     }
-
-    private readonly record struct EditorKey(string PluginId, Version Version);
 }

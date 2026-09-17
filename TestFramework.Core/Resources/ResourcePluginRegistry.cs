@@ -1,119 +1,89 @@
+using TestFramework.Abstractions.Plugins;
 using TestFramework.Abstractions.Resources;
+using TestFramework.Core.Plugins;
 
 namespace TestFramework.Core.Resources;
 
-public sealed class ResourcePluginRegistry
+public sealed class ResourcePluginRegistry : IResourcePluginCatalog
 {
-    private readonly Registry<IInstrumentDriverPlugin> _instrumentDrivers = new(plugin => plugin.Descriptor);
-    private readonly Registry<ITransportPlugin> _transports = new(plugin => plugin.Descriptor);
-    private readonly Registry<ITestServicePlugin> _services = new(plugin => plugin.Descriptor);
+    private readonly VersionedPluginIndex<IInstrumentDriverPlugin> _instrumentDrivers =
+        new("Instrument driver plugin", plugin => plugin.Descriptor.PluginId, plugin => plugin.Descriptor.Version);
 
-    public IReadOnlyCollection<IInstrumentDriverPlugin> InstrumentDrivers => _instrumentDrivers.Plugins;
+    private readonly VersionedPluginIndex<ITransportPlugin> _transports =
+        new("Transport plugin", plugin => plugin.Descriptor.PluginId, plugin => plugin.Descriptor.Version);
 
-    public IReadOnlyCollection<ITransportPlugin> Transports => _transports.Plugins;
+    private readonly VersionedPluginIndex<ITestServicePlugin> _services =
+        new("Service plugin", plugin => plugin.Descriptor.PluginId, plugin => plugin.Descriptor.Version);
 
-    public IReadOnlyCollection<ITestServicePlugin> Services => _services.Plugins;
+    public IReadOnlyCollection<IInstrumentDriverPlugin> InstrumentDrivers => Sort(_instrumentDrivers.Plugins, plugin => plugin.Descriptor);
 
-    public void RegisterInstrumentDriver(IInstrumentDriverPlugin plugin)
+    public IReadOnlyCollection<ITransportPlugin> Transports => Sort(_transports.Plugins, plugin => plugin.Descriptor);
+
+    public IReadOnlyCollection<ITestServicePlugin> Services => Sort(_services.Plugins, plugin => plugin.Descriptor);
+
+    public void RegisterInstrumentDriver(IInstrumentDriverPlugin plugin) => _instrumentDrivers.Register(plugin);
+
+    public void RegisterTransport(ITransportPlugin plugin) => _transports.Register(plugin);
+
+    public void RegisterService(ITestServicePlugin plugin) => _services.Register(plugin);
+
+    public bool TryResolve(
+        ResourcePluginKind kind,
+        string pluginId,
+        string? version,
+        out PluginVersionMatch match,
+        out Version resolvedVersion)
     {
-        _instrumentDrivers.Register(plugin);
-    }
-
-    public void RegisterTransport(ITransportPlugin plugin)
-    {
-        _transports.Register(plugin);
-    }
-
-    public void RegisterService(ITestServicePlugin plugin)
-    {
-        _services.Register(plugin);
-    }
-
-    public IInstrumentDriverPlugin GetRequiredInstrumentDriver(string pluginId, string? version = null)
-    {
-        return _instrumentDrivers.GetRequired(pluginId, version);
-    }
-
-    public ITransportPlugin GetRequiredTransport(string pluginId, string? version = null)
-    {
-        return _transports.GetRequired(pluginId, version);
-    }
-
-    public ITestServicePlugin GetRequiredService(string pluginId, string? version = null)
-    {
-        return _services.GetRequired(pluginId, version);
-    }
-
-    private sealed class Registry<TPlugin>
-    {
-        private readonly Func<TPlugin, ResourcePluginDescriptor> _getDescriptor;
-        private readonly Dictionary<string, List<TPlugin>> _plugins = new(StringComparer.OrdinalIgnoreCase);
-
-        public Registry(Func<TPlugin, ResourcePluginDescriptor> getDescriptor)
+        switch (kind)
         {
-            _getDescriptor = getDescriptor;
+            case ResourcePluginKind.InstrumentDriver:
+                return Describe(_instrumentDrivers.TryResolve(pluginId, version, out var instrument), instrument.Match, instrument.ResolvedVersion, out match, out resolvedVersion);
+            case ResourcePluginKind.Transport:
+                return Describe(_transports.TryResolve(pluginId, version, out var transport), transport.Match, transport.ResolvedVersion, out match, out resolvedVersion);
+            case ResourcePluginKind.Service:
+                return Describe(_services.TryResolve(pluginId, version, out var service), service.Match, service.ResolvedVersion, out match, out resolvedVersion);
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown resource plugin kind.");
         }
+    }
 
-        public IReadOnlyCollection<TPlugin> Plugins => _plugins.Values
-            .SelectMany(plugins => plugins)
-            .OrderBy(plugin => _getDescriptor(plugin).Category)
-            .ThenBy(plugin => _getDescriptor(plugin).DisplayName)
-            .ThenByDescending(plugin => _getDescriptor(plugin).Version)
+    public string DescribeMissing(ResourcePluginKind kind, string pluginId, string? version) => kind switch
+    {
+        ResourcePluginKind.InstrumentDriver => _instrumentDrivers.DescribeMissing(pluginId, version),
+        ResourcePluginKind.Transport => _transports.DescribeMissing(pluginId, version),
+        ResourcePluginKind.Service => _services.DescribeMissing(pluginId, version),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown resource plugin kind.")
+    };
+
+    private static bool Describe(
+        bool resolved,
+        PluginVersionMatch sourceMatch,
+        Version? sourceVersion,
+        out PluginVersionMatch match,
+        out Version resolvedVersion)
+    {
+        match = resolved ? sourceMatch : default;
+        resolvedVersion = resolved ? sourceVersion! : new Version(0, 0);
+        return resolved;
+    }
+
+    public IInstrumentDriverPlugin GetRequiredInstrumentDriver(string pluginId, string? version = null) =>
+        _instrumentDrivers.GetRequired(pluginId, version);
+
+    public ITransportPlugin GetRequiredTransport(string pluginId, string? version = null) =>
+        _transports.GetRequired(pluginId, version);
+
+    public ITestServicePlugin GetRequiredService(string pluginId, string? version = null) =>
+        _services.GetRequired(pluginId, version);
+
+    private static IReadOnlyCollection<TPlugin> Sort<TPlugin>(
+        IReadOnlyCollection<TPlugin> plugins,
+        Func<TPlugin, ResourcePluginDescriptor> getDescriptor)
+    {
+        return plugins
+            .OrderBy(plugin => getDescriptor(plugin).Category)
+            .ThenBy(plugin => getDescriptor(plugin).DisplayName)
+            .ThenByDescending(plugin => getDescriptor(plugin).Version)
             .ToArray();
-
-        public void Register(TPlugin plugin)
-        {
-            ArgumentNullException.ThrowIfNull(plugin);
-            var descriptor = _getDescriptor(plugin);
-            var pluginId = descriptor.PluginId;
-
-            if (!_plugins.TryGetValue(pluginId, out var versions))
-            {
-                versions = [];
-                _plugins[pluginId] = versions;
-            }
-
-            if (versions.Any(existing => _getDescriptor(existing).Version == descriptor.Version))
-            {
-                throw new InvalidOperationException(
-                    $"Resource plugin '{pluginId}' version '{descriptor.Version}' is already registered.");
-            }
-
-            versions.Add(plugin);
-        }
-
-        public TPlugin GetRequired(string pluginId, string? version)
-        {
-            if (TryGet(pluginId, version, out var plugin))
-            {
-                return plugin;
-            }
-
-            var versionText = string.IsNullOrWhiteSpace(version) ? string.Empty : $" version '{version}'";
-            throw new InvalidOperationException($"Resource plugin '{pluginId}'{versionText} is not registered.");
-        }
-
-        private bool TryGet(string pluginId, string? version, out TPlugin plugin)
-        {
-            plugin = default!;
-            if (!_plugins.TryGetValue(pluginId, out var versions) || versions.Count == 0)
-            {
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(version))
-            {
-                plugin = versions.OrderByDescending(candidate => _getDescriptor(candidate).Version).First();
-                return true;
-            }
-
-            if (!Version.TryParse(version, out var parsedVersion))
-            {
-                return false;
-            }
-
-            plugin = versions.FirstOrDefault(candidate => _getDescriptor(candidate).Version == parsedVersion)!;
-            return plugin is not null;
-        }
     }
 }

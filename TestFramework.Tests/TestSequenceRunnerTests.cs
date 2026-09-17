@@ -134,6 +134,31 @@ public sealed class TestSequenceRunnerTests
         Assert.Equal(TestVerdict.Inconclusive, Assert.Single(result.ItemResults).Verdict);
     }
 
+    [Theory]
+    [InlineData("4700µV")]
+    [InlineData("4700μV")]
+    public async Task RunAsync_NumericVerdict_AcceptsBothMicroSignCodePoints(string measurement)
+    {
+        // U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU look identical; instruments and
+        // operators produce either one, so both must convert rather than judge Inconclusive.
+        var registry = new PluginRegistry();
+        registry.Register(new OutputPlugin("measure", measurement, TestVerdict.Pass));
+        var sequence = SequenceWithSingleStep("measure", ErrorHandlingMode.Stop);
+        sequence.Items[0].VerdictSource = new VerdictSource
+        {
+            StepId = "main",
+            OutputKey = "value",
+            JudgeType = VerdictJudgeType.Numeric,
+            Unit = "mV",
+            LowerLimit = 4,
+            UpperLimit = 5
+        };
+
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+
+        Assert.Equal(TestVerdict.Pass, Assert.Single(result.ItemResults).Verdict);
+    }
+
     [Fact]
     public async Task RunAsync_PluginOperationCanceledException_BecomesStepError()
     {
@@ -371,6 +396,205 @@ public sealed class TestSequenceRunnerTests
         }
     }
 
+    [Fact]
+    public async Task RunAsync_Cancelled_StillRunsCleanupSoTheDeviceIsRestored()
+    {
+        var cancellable = new CancellableStepPlugin("cancellable");
+        var cleanup = new RecordingPlugin("cleanup");
+        var registry = new PluginRegistry();
+        registry.Register(cancellable);
+        registry.Register(cleanup);
+
+        var sequence = SequenceWithSingleStep("cancellable", ErrorHandlingMode.Stop);
+        sequence.Items[0].CleanupSteps = [Step("cleanup", "cleanup", ErrorHandlingMode.Stop)];
+
+        using var cancellation = new CancellationTokenSource();
+        var runner = new TestSequenceRunner(registry) { CleanupGracePeriod = TimeSpan.FromSeconds(10) };
+        var run = runner.RunAsync(sequence, cancellation.Token);
+        await cancellable.Started.Task;
+        await cancellation.CancelAsync();
+
+        var error = await Assert.ThrowsAsync<TestSequenceCancelledException>(() => run);
+        var item = Assert.Single(error.Result.ItemResults);
+
+        Assert.Equal(1, cleanup.Executions);
+        Assert.Equal(TestVerdict.Pass, Assert.Single(item.CleanupResults).Verdict);
+        Assert.Equal(TestVerdict.Cancelled, item.Verdict);
+    }
+
+    [Fact]
+    public async Task RunAsync_CleanupThatIgnoresTheGracePeriod_DoesNotHangTheStop()
+    {
+        var cancellable = new CancellableStepPlugin("cancellable");
+        var stuck = new BlockingPlugin();
+        var registry = new PluginRegistry();
+        registry.Register(cancellable);
+        registry.Register(stuck);
+
+        var sequence = SequenceWithSingleStep("cancellable", ErrorHandlingMode.Stop);
+        sequence.Items[0].CleanupSteps = [Step("cleanup", "blocking", ErrorHandlingMode.Stop)];
+
+        using var cancellation = new CancellationTokenSource();
+        var runner = new TestSequenceRunner(registry) { CleanupGracePeriod = TimeSpan.FromMilliseconds(50) };
+        var run = runner.RunAsync(sequence, cancellation.Token);
+        await cancellable.Started.Task;
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAsync<TestSequenceCancelledException>(() => run);
+
+        stuck.Release.TrySetResult();
+        await runner.PendingStepsCompletion;
+    }
+
+    private sealed class CancellableStepPlugin : ResultPluginBase
+    {
+        public CancellableStepPlugin(string pluginId) : base(pluginId) { }
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async Task<TestStepResult> ExecuteAsync(TestStepExecutionContext context, object settings, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return new TestStepResult { Verdict = TestVerdict.Pass };
+        }
+    }
+
+    private sealed class RecordingPlugin : ResultPluginBase
+    {
+        public RecordingPlugin(string pluginId, Version? version = null) : base(pluginId, version) { }
+
+        public int Executions { get; private set; }
+
+        public override Task<TestStepResult> ExecuteAsync(TestStepExecutionContext context, object settings, CancellationToken cancellationToken)
+        {
+            Executions++;
+            return Task.FromResult(new TestStepResult { Verdict = TestVerdict.Pass });
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PluginMutatesVariableInPlace_DoesNotRewriteTheInitialSnapshot()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new VariableMutatingPlugin("mutate"));
+        var sequence = SequenceWithSingleStep("mutate", ErrorHandlingMode.Stop);
+        sequence.Variables["payload"] = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["state"] = "before" };
+
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+
+        var initial = Assert.IsType<Dictionary<string, object?>>(result.InitialVariables["payload"]);
+        Assert.Equal("before", initial["state"]);
+    }
+
+    private sealed class VariableMutatingPlugin : ResultPluginBase
+    {
+        public VariableMutatingPlugin(string pluginId) : base(pluginId) { }
+
+        public override Task<TestStepResult> ExecuteAsync(TestStepExecutionContext context, object settings, CancellationToken cancellationToken)
+        {
+            if (context.Variables["payload"] is IDictionary<string, object?> payload)
+            {
+                payload["state"] = "after";
+            }
+
+            return Task.FromResult(new TestStepResult { Verdict = TestVerdict.Pass });
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_DisabledItemsAndSteps_AreSkippedAndStillAggregateToPass()
+    {
+        var registry = new PluginRegistry();
+        var executed = new RecordingPlugin("executed");
+        registry.Register(executed);
+
+        var sequence = new TestSequence
+        {
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Id = "disabled-item",
+                    Name = "Disabled Item",
+                    Enabled = false,
+                    MainSteps = [Step("main", "executed", ErrorHandlingMode.Stop)],
+                    VerdictSource = new VerdictSource { StepId = "main" }
+                },
+                new TestItemDefinition
+                {
+                    Id = "enabled-item",
+                    Name = "Enabled Item",
+                    MainSteps =
+                    [
+                        Step("main", "executed", ErrorHandlingMode.Stop),
+                        DisabledStep("skipped", "executed")
+                    ],
+                    VerdictSource = new VerdictSource { StepId = "main" }
+                }
+            ]
+        };
+
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+
+        Assert.Equal(1, executed.Executions);
+        Assert.Equal(TestVerdict.Skipped, result.ItemResults[0].Verdict);
+        Assert.Equal(TestVerdict.Skipped, result.ItemResults[1].MainResults[1].Verdict);
+        Assert.Equal(TestVerdict.Pass, result.ItemResults[1].Verdict);
+        Assert.Equal(TestVerdict.Pass, result.Verdict);
+    }
+
+    private static TestStepDefinition DisabledStep(string id, string pluginId)
+    {
+        var step = Step(id, pluginId, ErrorHandlingMode.Stop);
+        step.Enabled = false;
+        return step;
+    }
+
+    [Fact]
+    public async Task RunAsync_PluginVersionSubstituted_RunsAndLogsTheSubstitutionOncePerReference()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new RecordingPlugin("measure", new Version(1, 2, 0)));
+        var observer = new LogCapturingObserver();
+
+        var sequence = SequenceWithSingleStep("measure", ErrorHandlingMode.Stop);
+        // Two steps sharing one plugin reference: the substitution is a property of the reference,
+        // so the operator should be told once, not once per step.
+        sequence.Items[0].MainSteps.Add(Step("second", "measure", ErrorHandlingMode.Stop));
+        foreach (var step in sequence.Items[0].MainSteps) step.PluginVersion = "1.0.0";
+
+        var result = await new TestSequenceRunner(registry, observer).RunAsync(sequence);
+
+        Assert.Equal(TestVerdict.Pass, Assert.Single(result.ItemResults).Verdict);
+        var warning = Assert.Single(observer.Messages, message => message.Contains("is not installed"));
+        Assert.Contains("1.0.0", warning);
+        Assert.Contains("1.2.0", warning);
+    }
+
+    [Fact]
+    public async Task RunAsync_PluginVersionIncompatible_FailsTheStepAndNamesTheInstalledVersions()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new RecordingPlugin("measure", new Version(2, 0, 0)));
+
+        var sequence = SequenceWithSingleStep("measure", ErrorHandlingMode.Stop);
+        sequence.Items[0].MainSteps[0].PluginVersion = "1.0.0";
+
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+        var step = Assert.Single(Assert.Single(result.ItemResults).MainResults);
+
+        Assert.Equal(TestVerdict.Error, step.Verdict);
+        Assert.Contains("2.0.0", step.ErrorMessage);
+    }
+
+    private sealed class LogCapturingObserver : ITestExecutionObserver
+    {
+        public List<string> Messages { get; } = [];
+
+        public void Log(string message) => Messages.Add(message);
+    }
+
     private static TestSequence SequenceWithSingleStep(string pluginId, ErrorHandlingMode onError)
     {
         return new TestSequence
@@ -464,6 +688,45 @@ public sealed class TestSequenceRunnerTests
         }
     }
 
+    [Fact]
+    public async Task RunAsync_ObserverThrows_RunStillCompletesWithResults()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new OutputPlugin("measure", 1.0, TestVerdict.Pass));
+        var sequence = SequenceWithSingleStep("measure", ErrorHandlingMode.Stop);
+        var observer = new ThrowingObserver();
+
+        var result = await new TestSequenceRunner(registry, observer).RunAsync(sequence);
+
+        Assert.True(observer.WasCalled);
+        Assert.Equal(TestVerdict.Pass, Assert.Single(result.ItemResults).Verdict);
+    }
+
+    private sealed class ThrowingObserver : ITestExecutionObserver
+    {
+        public bool WasCalled { get; private set; }
+
+        public void SequenceStarted(TestSequence sequence) => Fail();
+
+        public void SequenceFinished(TestSequence sequence, TestSequenceRunResult result) => Fail();
+
+        public void ItemStarted(TestItemDefinition item) => Fail();
+
+        public void ItemFinished(TestItemDefinition item, TestItemRunResult result) => Fail();
+
+        public void StepStarted(TestItemDefinition item, TestStepDefinition step, StepSection section) => Fail();
+
+        public void StepFinished(TestItemDefinition item, TestStepDefinition step, StepSection section, TestStepResult result) => Fail();
+
+        public void Log(string message) => Fail();
+
+        private void Fail()
+        {
+            WasCalled = true;
+            throw new InvalidOperationException("observer is broken");
+        }
+    }
+
     private sealed class OutputPlugin : ITestStepPlugin
     {
         private readonly object? _value;
@@ -541,13 +804,13 @@ public sealed class TestSequenceRunnerTests
 
     private abstract class ResultPluginBase : ITestStepPlugin
     {
-        protected ResultPluginBase(string pluginId)
+        protected ResultPluginBase(string pluginId, Version? version = null)
         {
             Descriptor = new TestStepPluginDescriptor
             {
                 PluginId = pluginId,
                 DisplayName = pluginId,
-                Version = new Version(1, 0, 0)
+                Version = version ?? new Version(1, 0, 0)
             };
         }
 

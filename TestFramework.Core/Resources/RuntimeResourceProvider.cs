@@ -1,6 +1,14 @@
-namespace TestFramework.Abstractions.Resources;
+using TestFramework.Abstractions.Resources;
 
+namespace TestFramework.Core.Resources;
+
+/// <summary>
+/// The host-owned container for a run's resources. It lives in Core rather than beside the plugin
+/// contracts because registering and disposing resources is the host's job: plugins receive the
+/// read-only <see cref="IResourceScope"/> instead.
+/// </summary>
 public sealed class RuntimeResourceProvider :
+    IResourceScope,
     IInstrumentProvider,
     ITransportProvider,
     ITestServiceProvider,
@@ -8,6 +16,12 @@ public sealed class RuntimeResourceProvider :
     IAsyncDisposable
 {
     public static RuntimeResourceProvider Empty { get; } = new(isReadOnly: true);
+
+    public IInstrumentProvider Instruments => this;
+
+    public ITransportProvider Transports => this;
+
+    public ITestServiceProvider Services => this;
 
     private readonly bool _isReadOnly;
     private readonly Dictionary<string, object> _instruments = new(StringComparer.OrdinalIgnoreCase);

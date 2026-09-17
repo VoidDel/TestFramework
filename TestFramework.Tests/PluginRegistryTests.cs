@@ -49,6 +49,64 @@ public sealed class PluginRegistryTests
             registry.Register(new StubPlugin("demo.step", new Version(1, 0, 0))));
     }
 
+    [Fact]
+    public void TryResolve_ExactVersionInstalled_RunsThatVersionAndReportsNoSubstitution()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new StubPlugin("demo.step", new Version(1, 0, 0)));
+        registry.Register(new StubPlugin("demo.step", new Version(1, 2, 0)));
+
+        Assert.True(registry.TryResolve("demo.step", "1.0.0", out var resolution));
+
+        Assert.Equal(new Version(1, 0, 0), resolution.ResolvedVersion);
+        Assert.Equal(PluginVersionMatch.Exact, resolution.Match);
+        Assert.False(resolution.IsSubstituted);
+    }
+
+    [Fact]
+    public void TryResolve_RequestedVersionRemoved_SubstitutesTheNewestCompatibleBuild()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new StubPlugin("demo.step", new Version(1, 2, 0)));
+        registry.Register(new StubPlugin("demo.step", new Version(2, 0, 0)));
+
+        Assert.True(registry.TryResolve("demo.step", "1.0.0", out var resolution));
+
+        Assert.Equal(new Version(1, 2, 0), resolution.ResolvedVersion);
+        Assert.True(resolution.IsSubstituted);
+        Assert.Equal("1.0.0", resolution.RequestedVersion);
+    }
+
+    [Fact]
+    public void TryResolve_OnlyADifferentMajorVersionInstalled_Fails()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new StubPlugin("demo.step", new Version(2, 0, 0)));
+
+        Assert.False(registry.TryResolve("demo.step", "1.0.0", out _));
+    }
+
+    [Fact]
+    public void DescribeMissing_DistinguishesAVersionMismatchFromAnUninstalledPlugin()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new StubPlugin("demo.step", new Version(2, 0, 0)));
+
+        var mismatch = registry.DescribeMissing("demo.step", "1.0.0");
+        Assert.Contains("2.0.0", mismatch);
+        Assert.Contains("1.0.0", mismatch);
+
+        Assert.DoesNotContain("Installed versions", registry.DescribeMissing("absent.step", "1.0.0"));
+    }
+
+    [Fact]
+    public void Register_BlankPluginId_IsRejectedAtRegistrationRatherThanBecomingUnaddressable()
+    {
+        var registry = new PluginRegistry();
+
+        Assert.Throws<InvalidOperationException>(() => registry.Register(new StubPlugin("   ", new Version(1, 0, 0))));
+    }
+
     private sealed class StubPlugin : ITestStepPlugin
     {
         public StubPlugin(string pluginId, Version version)

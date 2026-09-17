@@ -137,6 +137,62 @@ public sealed class TestSequenceYamlServiceTests
         Assert.Throws<InvalidDataException>(() => new TestSequenceYamlService().Load(yaml));
     }
 
+    [Theory]
+    [InlineData("null")]
+    [InlineData("Null")]
+    [InlineData("NULL")]
+    [InlineData("~")]
+    [InlineData("")]
+    public void SaveAndLoad_PreservesStringsThatYamlWouldResolveToNull(string value)
+    {
+        var service = new TestSequenceYamlService();
+        var sequence = new TestSequence { Name = "Sequence" };
+        sequence.Variables["variable"] = value;
+        sequence.Instruments.Add(new InstrumentDefinition
+        {
+            Id = "instrument",
+            DriverId = "demo.driver",
+            Settings = { ["setting"] = value }
+        });
+        var step = Step("step");
+        step.Parameters["parameter"] = value;
+        sequence.Items.Add(new TestItemDefinition { Id = "item", Name = "Item", MainSteps = [step] });
+
+        var reloaded = service.Load(service.Save(sequence));
+
+        Assert.Equal(value, reloaded.Variables["variable"]);
+        Assert.Equal(value, reloaded.Instruments[0].Settings["setting"]);
+        Assert.Equal(value, reloaded.Items[0].MainSteps[0].Parameters["parameter"]);
+    }
+
+    [Fact]
+    public void Load_RejectsDuplicateKeysInsteadOfSilentlyOverwriting()
+    {
+        var service = new TestSequenceYamlService();
+
+        Assert.ThrowsAny<Exception>(() => service.Load(
+            """
+            schemaVersion: 1
+            name: Sequence
+            variables:
+              value: 1
+              value: 2
+            items: []
+            """));
+    }
+
+    [Fact]
+    public void Load_RejectsNestingDeeperThanTheSupportedLimit()
+    {
+        // Deserializing recurses per level, and a StackOverflowException would kill the process
+        // rather than surface as a load failure, so the depth must be rejected before parsing.
+        const int depth = 5000;
+        var yaml = "schemaVersion: 1\nname: Sequence\nvariables:\n  value: " +
+                   new string('[', depth) + new string(']', depth) + "\nitems: []";
+
+        Assert.Throws<InvalidDataException>(() => new TestSequenceYamlService().Load(yaml));
+    }
+
     private static TestStepDefinition Step(string id)
     {
         return new TestStepDefinition

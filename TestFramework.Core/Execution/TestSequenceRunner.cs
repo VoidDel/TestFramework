@@ -2,6 +2,7 @@ using TestFramework.Abstractions.Execution;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.Abstractions.Resources;
+using TestFramework.Core.Resources;
 using TestFramework.Core.Variables;
 using System.Text.RegularExpressions;
 
@@ -16,6 +17,19 @@ public sealed class TestSequenceRunner
     private int _running;
     private bool _abandonedStep;
 
+    // Plugin references already reported as version substitutions in this run. A sequence
+    // usually reuses the same plugin across many steps, and the warning is about the
+    // reference, not the step, so it is emitted once per reference.
+    private readonly HashSet<string> _reportedSubstitutions = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Bounded window granted to an item's cleanup steps after the user cancels a run. Cancellation
+    /// would otherwise leave the device in whatever state the interrupted step left it, unlike the
+    /// Stop and JumpToCleanup error policies which both run cleanup. The bound keeps a stuck
+    /// cleanup from hanging the stop indefinitely.
+    /// </summary>
+    public TimeSpan CleanupGracePeriod { get; init; } = TimeSpan.FromSeconds(30);
+
     // Hosts must await this before disposing resources or reusing plugin instances.
     public Task PendingStepsCompletion { get; private set; } = Task.CompletedTask;
 
@@ -25,7 +39,7 @@ public sealed class TestSequenceRunner
         RuntimeResourceProvider? resources = null)
     {
         _pluginRegistry = pluginRegistry;
-        _observer = observer ?? new NullTestExecutionObserver();
+        _observer = new SafeExecutionObserver(observer ?? new NullTestExecutionObserver());
         _resources = resources ?? RuntimeResourceProvider.Empty;
     }
 
@@ -40,6 +54,7 @@ public sealed class TestSequenceRunner
         try
         {
             _abandonedStep = false;
+            _reportedSubstitutions.Clear();
             return await RunCoreAsync(sequence, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -61,7 +76,7 @@ public sealed class TestSequenceRunner
             SequenceId = sequence.Id,
             SequenceName = sequence.Name,
             StartedAt = DateTimeOffset.Now,
-            InitialVariables = new Dictionary<string, object?>(sequence.Variables, StringComparer.OrdinalIgnoreCase)
+            InitialVariables = VariableSnapshot.Capture(sequence.Variables)
         };
 
         _observer.SequenceStarted(sequence);
@@ -103,7 +118,7 @@ public sealed class TestSequenceRunner
         result.FinishedAt = DateTimeOffset.Now;
         result.Verdict = cancelled ? TestVerdict.Cancelled : AggregateSequenceVerdict(result.ItemResults);
         result.HasPendingExecution = _abandonedStep;
-        result.FinalVariables = new Dictionary<string, object?>(variables, StringComparer.OrdinalIgnoreCase);
+        result.FinalVariables = VariableSnapshot.Capture(variables);
         _observer.SequenceFinished(sequence, result);
 
         if (cancelled) throw new TestSequenceCancelledException(result, cancellationToken);
@@ -157,13 +172,45 @@ public sealed class TestSequenceRunner
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             result.Verdict = TestVerdict.Cancelled;
+            await RunCleanupAfterCancellationAsync(sequence, item, result, stepResults, variables).ConfigureAwait(false);
             throw;
         }
         finally
         {
             result.FinishedAt = DateTimeOffset.Now;
-            result.VariablesAfter = new Dictionary<string, object?>(variables, StringComparer.OrdinalIgnoreCase);
+            result.VariablesAfter = VariableSnapshot.Capture(variables);
             _observer.ItemFinished(item, result);
+        }
+    }
+
+    /// <summary>
+    /// Runs the item's cleanup steps after the user cancelled, within <see cref="CleanupGracePeriod"/>.
+    /// The grace token is deliberately not linked to the caller's token, which is already cancelled
+    /// and would abort every cleanup step at its first cancellation check. A step that was abandoned
+    /// keeps cleanup suppressed, because its resources may still be in use by the pending plugin.
+    /// </summary>
+    private async Task RunCleanupAfterCancellationAsync(
+        TestSequence sequence,
+        TestItemDefinition item,
+        TestItemRunResult result,
+        Dictionary<string, TestStepResult> stepResults,
+        IDictionary<string, object?> variables)
+    {
+        if (_abandonedStep || item.CleanupSteps.Count == 0 || result.CleanupResults.Count > 0)
+        {
+            return;
+        }
+
+        using var grace = new CancellationTokenSource(CleanupGracePeriod);
+        try
+        {
+            await RunSectionAsync(sequence, item, StepSection.Cleanup, item.CleanupSteps, result.CleanupResults, stepResults, variables, grace.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The grace period elapsed or cleanup failed outright. The original cancellation is
+            // rethrown by the caller and must not be replaced by this one.
         }
     }
 
@@ -256,7 +303,7 @@ public sealed class TestSequenceRunner
 
         try
         {
-            var plugin = _pluginRegistry.GetRequired(step.PluginId, step.PluginVersion);
+            var plugin = ResolveStepPlugin(step);
             var resolvedParameters = VariableResolver.ResolveDictionary(step.Parameters, variables);
             if (step.TimeoutMs is <= 0) throw new ArgumentOutOfRangeException(nameof(step.TimeoutMs), "Timeout must be positive or omitted.");
             var timeoutMs = step.TimeoutMs.GetValueOrDefault();
@@ -345,6 +392,28 @@ public sealed class TestSequenceRunner
         try { await execution.ConfigureAwait(false); }
         catch (Exception) { /* Timeout/cancellation has already been reported. */ }
         finally { timeoutCts?.Dispose(); }
+    }
+
+    /// <summary>
+    /// Resolves the plugin a step names. When the exact version is gone and a compatible newer one
+    /// is used instead, the substitution is logged: the sequence file no longer identifies the code
+    /// that produced the results, and that has to be visible in the run log.
+    /// </summary>
+    private ITestStepPlugin ResolveStepPlugin(TestStepDefinition step)
+    {
+        if (!_pluginRegistry.TryResolve(step.PluginId, step.PluginVersion, out var resolution))
+        {
+            throw new InvalidOperationException(_pluginRegistry.DescribeMissing(step.PluginId, step.PluginVersion));
+        }
+
+        if (resolution.IsSubstituted && _reportedSubstitutions.Add($"{step.PluginId}@{step.PluginVersion}"))
+        {
+            _observer.Log(
+                $"Plugin '{step.PluginId}' version '{step.PluginVersion}' is not installed; " +
+                $"running version '{resolution.ResolvedVersion}' instead.");
+        }
+
+        return resolution.Plugin;
     }
 
     private static TestStepResult CreateErrorResult(TestStepDefinition step, DateTimeOffset startedAt, string message, Exception? exception)

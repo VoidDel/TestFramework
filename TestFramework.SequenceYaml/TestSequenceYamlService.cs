@@ -8,13 +8,18 @@ namespace TestFramework.SequenceYaml;
 
 public sealed class TestSequenceYamlService
 {
+    /// <summary>Maximum collection nesting the editor will parse; see <see cref="RejectUnsupportedRoundTripSyntax"/>.</summary>
+    private const int MaxNestingDepth = 64;
+
     private readonly ISerializer _serializer = new SerializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .DisableAliases()
+        .WithEventEmitter(next => new NullLikeStringEventEmitter(next))
         .Build();
 
     private readonly IDeserializer _deserializer = new DeserializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .WithDuplicateKeyChecking()
         .Build();
 
     public TestSequence LoadFromFile(string filePath)
@@ -90,9 +95,17 @@ public sealed class TestSequenceYamlService
         }
     }
 
+    /// <summary>
+    /// Single streaming pre-scan over the token stream. Besides rejecting comments and aliases it
+    /// bounds the collection nesting depth: the deserializer recurses per level, so a deeply nested
+    /// document overflows the stack, and a StackOverflowException cannot be caught - it kills the
+    /// process. Callers that load a whole directory would otherwise be unable to start at all.
+    /// The scanner itself is a non-recursive state machine, so it is safe to run first.
+    /// </summary>
     private static void RejectUnsupportedRoundTripSyntax(string yaml)
     {
         var scanner = new Scanner(new StringReader(yaml), skipComments: false);
+        var depth = 0;
         while (scanner.MoveNext())
         {
             switch (scanner.Current)
@@ -102,6 +115,21 @@ public sealed class TestSequenceYamlService
                 case Anchor:
                 case AnchorAlias:
                     throw new InvalidDataException("YAML anchors and aliases are not supported by the visual editor because saving would flatten them.");
+                case BlockMappingStart:
+                case BlockSequenceStart:
+                case FlowMappingStart:
+                case FlowSequenceStart:
+                    if (++depth > MaxNestingDepth)
+                    {
+                        throw new InvalidDataException($"YAML nesting is deeper than the supported limit of {MaxNestingDepth} levels.");
+                    }
+
+                    break;
+                case BlockEnd:
+                case FlowMappingEnd:
+                case FlowSequenceEnd:
+                    depth--;
+                    break;
             }
         }
     }

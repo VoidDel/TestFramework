@@ -124,23 +124,37 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        if (_settingsEditorRegistry is not null &&
-            _settingsEditorRegistry.TryCreateEditor(
-                _step.PluginId,
-                _step.PluginVersion,
-                _settings,
-                new SettingsEditContext(
-                    SaveSelectedPluginSettings,
-                    _variables,
-                    GetStepParameterValue,
-                    SetStepParameterValue),
-                out var editor))
+        // The editor factory is plugin-supplied code. An exception here would otherwise escape a
+        // constructor or a synchronous handler and terminate the process, so the step falls back to
+        // the raw parameter list instead.
+        try
         {
-            PluginSettingsContent.Content = editor;
+            if (_settingsEditorRegistry is not null &&
+                _settingsEditorRegistry.TryCreateEditor(
+                    _step.PluginId,
+                    _step.PluginVersion,
+                    _settings,
+                    new SettingsEditContext(
+                        SaveSelectedPluginSettings,
+                        _variables,
+                        GetStepParameterValue,
+                        SetStepParameterValue),
+                    out var editor))
+            {
+                PluginSettingsContent.Content = editor;
+            }
+            else
+            {
+                PluginSettingsContent.Content = new TextBlock { Text = "该插件未提供配置界面。" };
+            }
         }
-        else
+        catch (Exception ex)
         {
-            PluginSettingsContent.Content = new TextBlock { Text = "该插件未提供配置界面。" };
+            PluginSettingsContent.Content = new TextBlock
+            {
+                Text = $"插件配置界面加载失败，请使用参数列表编辑：{ex.Message}",
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            };
         }
     }
 

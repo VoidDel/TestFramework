@@ -10,6 +10,6 @@ public interface ITransportPlugin
 
     Task<object> CreateAsync(
         TransportDefinition definition,
-        RuntimeResourceProvider resources,
+        IResourceScope resources,
         CancellationToken cancellationToken);
 }

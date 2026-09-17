@@ -188,6 +188,38 @@ public sealed class EditorSafetyTests
         }
     }
 
+    [Fact]
+    public async Task DeleteSequence_WithoutConfirmation_KeepsTheFileOnDisk()
+    {
+        await WithView(async (view, window, directory) =>
+        {
+            var document = Field<SequenceDocument>(view, "_currentDocument");
+            await (Task<string>)Invoke(view, "SaveDocumentAsync", document)!;
+            var filePath = document.FilePath!;
+            Assert.True(File.Exists(filePath));
+
+            var prompted = 0;
+            view.DeleteSequencePrompt = _ =>
+            {
+                prompted++;
+                return Task.FromResult(false);
+            };
+            Invoke(view, "DeleteSequence_OnClick", null, null);
+            await WaitUntil(() => prompted > 0);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(File.Exists(filePath));
+            Assert.Contains(Field<System.Collections.Generic.List<SequenceDocument>>(view, "_sequenceDocuments"), candidate => candidate == document);
+
+            view.DeleteSequencePrompt = _ => Task.FromResult(true);
+            Invoke(view, "DeleteSequence_OnClick", null, null);
+            await WaitUntil(() => !File.Exists(filePath));
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.False(File.Exists(filePath));
+        });
+    }
+
     private static async Task WaitUntil(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));

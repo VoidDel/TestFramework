@@ -10,6 +10,6 @@ public interface IInstrumentDriverPlugin
 
     Task<object> CreateAsync(
         InstrumentDefinition definition,
-        RuntimeResourceProvider resources,
+        IResourceScope resources,
         CancellationToken cancellationToken);
 }

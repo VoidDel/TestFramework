@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TestFramework 项目评估报告</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700;900&display=swap">
+<style>
+  :root {
+    --ground: #F5F6F4;
+    --surface: #FFFFFF;
+    --surface-2: #EEF1EE;
+    --ink: #1C2622;
+    --ink-2: #4A5751;
+    --ink-3: #76837C;
+    --line: #D9DFDA;
+    --accent: #0E7490;
+    --accent-soft: #E0F2F5;
+    --sev-high: #B42318;
+    --sev-high-soft: #FBEAE8;
+    --sev-med: #B45309;
+    --sev-med-soft: #FBF0DF;
+    --sev-low: #4D7C0F;
+    --sev-low-soft: #EFF5DF;
+    --sev-info: #5B6B76;
+    --sev-info-soft: #EBF0F2;
+    --pass: #15803D;
+    --pass-soft: #E4F3E8;
+    --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --sans: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #10140F;
+      --surface: #171C16;
+      --surface-2: #1F2620;
+      --ink: #E3EAE4;
+      --ink-2: #ADBAB0;
+      --ink-3: #7E8C82;
+      --line: #2B342D;
+      --accent: #3FB8CF;
+      --accent-soft: #123038;
+      --sev-high: #F08A80;
+      --sev-high-soft: #3A1A17;
+      --sev-med: #E5A55C;
+      --sev-med-soft: #36260F;
+      --sev-low: #A3CB5B;
+      --sev-low-soft: #232D11;
+      --sev-info: #93A5B0;
+      --sev-info-soft: #232B30;
+      --pass: #6FCF8E;
+      --pass-soft: #14291B;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #10140F;
+    --surface: #171C16;
+    --surface-2: #1F2620;
+    --ink: #E3EAE4;
+    --ink-2: #ADBAB0;
+    --ink-3: #7E8C82;
+    --line: #2B342D;
+    --accent: #3FB8CF;
+    --accent-soft: #123038;
+    --sev-high: #F08A80;
+    --sev-high-soft: #3A1A17;
+    --sev-med: #E5A55C;
+    --sev-med-soft: #36260F;
+    --sev-low: #A3CB5B;
+    --sev-low-soft: #232D11;
+    --sev-info: #93A5B0;
+    --sev-info-soft: #232B30;
+    --pass: #6FCF8E;
+    --pass-soft: #14291B;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 20px;
+    padding-block: 0 96px;
+  }
+
+  /* ---------- masthead nav ---------- */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--ground) 88%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar .wrap {
+    padding-block: 10px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .topbar .brand {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .topbar nav {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+  .topbar nav a {
+    font-size: 12.5px;
+    color: var(--ink-2);
+    text-decoration: none;
+    padding: 4px 10px;
+    border-radius: 99px;
+  }
+  .topbar nav a:hover, .topbar nav a:focus-visible {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
+  /* ---------- hero ---------- */
+  header.hero { padding-block: 56px 40px; border-bottom: 1px solid var(--line); }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .14em;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  h1 {
+    font-size: clamp(28px, 5vw, 40px);
+    font-weight: 900;
+    line-height: 1.25;
+    margin: 0 0 18px;
+    text-wrap: balance;
+    letter-spacing: .01em;
+  }
+  .verdict-line {
+    font-size: 16.5px;
+    color: var(--ink-2);
+    max-width: 46em;
+    margin: 0 0 28px;
+  }
+  .verdict-line strong { color: var(--ink); }
+  .statrow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 128px;
+  }
+  .stat .num {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .stat .num.good { color: var(--pass); }
+  .stat .lbl { font-size: 12px; color: var(--ink-3); }
+
+  /* ---------- sections ---------- */
+  section { padding-block: 44px 8px; }
+  .sec-head { margin-bottom: 22px; }
+  .sec-head .kicker {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .12em;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  h2 {
+    font-size: 23px;
+    font-weight: 700;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .sec-head p { margin: 8px 0 0; color: var(--ink-2); max-width: 46em; font-size: 14.5px; }
+
+  /* ---------- scoreboard ---------- */
+  .scores {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+  }
+  .score-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .score-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .score-name { font-weight: 700; font-size: 14.5px; }
+  .score-val {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 19px;
+    font-variant-numeric: tabular-nums;
+  }
+  .bar {
+    height: 5px;
+    border-radius: 99px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+  .bar > i {
+    display: block;
+    height: 100%;
+    border-radius: 99px;
+    background: var(--accent);
+  }
+  .score-note { font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+
+  /* ---------- findings ---------- */
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin-bottom: 14px;
+    border-left: 4px solid var(--sev-high);
+  }
+  .finding.sev-medium { border-left-color: var(--sev-med); }
+  .finding-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .finding-head h3 {
+    margin: 0;
+    font-size: 16.5px;
+    font-weight: 700;
+    flex: 1 1 320px;
+    text-wrap: balance;
+  }
+  .chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    padding: 3px 9px;
+    border-radius: 99px;
+    white-space: nowrap;
+  }
+  .chip.high { background: var(--sev-high-soft); color: var(--sev-high); }
+  .chip.medium { background: var(--sev-med-soft); color: var(--sev-med); }
+  .chip.low { background: var(--sev-low-soft); color: var(--sev-low); }
+  .chip.info { background: var(--sev-info-soft); color: var(--sev-info); }
+  .chip.verified { background: var(--pass-soft); color: var(--pass); }
+  .filepath {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 5px;
+    padding: 2px 8px;
+    display: inline-block;
+    margin: 4px 0 10px;
+    word-break: break-all;
+  }
+  .finding p { margin: 8px 0; color: var(--ink-2); font-size: 14.5px; }
+  .finding p strong { color: var(--ink); }
+  .fix {
+    margin-top: 12px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13.5px;
+    color: var(--ink-2);
+  }
+  .fix b {
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  /* ---------- table ---------- */
+  .tablebox { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13.5px;
+    min-width: 640px;
+  }
+  th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .08em;
+    color: var(--ink-3);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    color: var(--ink-2);
+  }
+  tr:last-child td { border-bottom: none; }
+  td code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--accent);
+    word-break: break-all;
+  }
+  td .t { color: var(--ink); font-weight: 500; }
+
+  /* ---------- text blocks ---------- */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .panel h3 { margin: 0 0 8px; font-size: 15.5px; }
+  .panel p, .panel li { font-size: 14px; color: var(--ink-2); }
+  .panel p { margin: 8px 0; }
+  .panel ul { margin: 8px 0; padding-left: 1.3em; }
+  .panel li { margin-bottom: 6px; }
+  .panel li strong, .panel p strong { color: var(--ink); }
+  .panel code { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+
+  .blind-list { display: flex; flex-direction: column; gap: 12px; }
+  .blind {
+    display: flex;
+    gap: 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .blind::before {
+    content: "";
+    flex: 0 0 4px;
+    border-radius: 99px;
+    background: var(--sev-med);
+  }
+  .blind h3 { margin: 0 0 4px; font-size: 15px; }
+  .blind p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+  .blind code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
+
+  /* ---------- action plan ---------- */
+  .tiers { display: flex; flex-direction: column; gap: 14px; }
+  .tier {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .tier-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tier-tag {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: .06em;
+  }
+  .tier.p0 .tier-tag { color: var(--sev-high); }
+  .tier.p1 .tier-tag { color: var(--sev-med); }
+  .tier.p2 .tier-tag { color: var(--sev-info); }
+  .tier-head span { font-size: 13px; color: var(--ink-3); }
+  .tier ul { margin: 0; padding: 14px 18px 14px 36px; }
+  .tier li { margin-bottom: 7px; font-size: 14px; color: var(--ink-2); }
+  .tier li strong { color: var(--ink); }
+  .tier li code { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--ink-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+  }
+  footer .mono { font-family: var(--mono); }
+
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <span class="brand">TestFramework · 评估报告</span>
+    <nav>
+      <a href="#scores">维度评分</a>
+      <a href="#high">高危问题</a>
+      <a href="#medium">中危一览</a>
+      <a href="#tests">测试与文档</a>
+      <a href="#blindspots">盲区</a>
+      <a href="#plan">行动建议</a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">代码评估 · 2026-09-17 · main @ 663fe14</div>
+  <h1>TestFramework 项目评估报告</h1>
+  <p class="verdict-line">
+    <strong>总体结论：设计纪律明显强于同规模项目的插件化测试框架。</strong>
+    分层是教科书式 DAG、文档与代码高度一致、执行引擎的取消/超时/隔离模型考虑周到。
+    短板集中在三处：插件体系的"收尾"（加载噪音、无法卸载、无版本策略）、UI 层架构（1847 行上帝类、无 MVVM）、以及若干已确认的静默数据损坏缺陷。
+    综合评分约 <strong>7 / 10</strong>。
+  </p>
+  <div class="statrow">
+    <div class="stat"><span class="num">78</span><span class="lbl">项评审发现</span></div>
+    <div class="stat"><span class="num">32</span><span class="lbl">项经对抗性核实</span></div>
+    <div class="stat"><span class="num good">30 / 32</span><span class="lbl">核实确认 · 0 项被驳回</span></div>
+    <div class="stat"><span class="num good">70 / 70</span><span class="lbl">dotnet test 实测通过</span></div>
+    <div class="stat"><span class="num">8</span><span class="lbl">评估维度 · 41 个代理</span></div>
+  </div>
+</header>
+
+<!-- ================= 维度评分 ================= -->
+<section id="scores">
+  <div class="sec-head">
+    <div class="kicker">01 · SCOREBOARD</div>
+    <h2>八个维度评分</h2>
+    <p>每个维度由独立代理通读对应代码后评分，重要发现再由怀疑者代理阅读实际代码进行反驳式核实。</p>
+  </div>
+  <div class="scores">
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">架构与依赖</span><span class="score-val">7.5</span></div>
+      <div class="bar"><i style="width:75%"></i></div>
+      <div class="score-note">清晰 DAG、插件契约 UI 无关真实落地；契约细节有抽象泄漏。</div>
+    </div>
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">Core 执行引擎</span><span class="score-val">7.5</span></div>
+      <div class="bar"><i style="width:75%"></i></div>
+      <div class="score-note">隔离/取消模型成熟；cleanup 取消语义与 observer 异常隔离有缺陷。</div>
+    </div>
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">SequenceYaml</span><span class="score-val">7.0</span></div>
+      <div class="bar"><i style="width:70%"></i></div>
+      <div class="score-note">严格性设计有诚意；存在静默数据腐蚀高危缺陷。</div>
+    </div>
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">插件体系</span><span class="score-val">6.0</span></div>
+      <div class="bar"><i style="width:60%"></i></div>
+      <div class="score-note">机制先进、收尾粗糙：加载噪音、卸载名存实亡、版本精确匹配。</div>
+    </div>
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">桌面应用 UI</span><span class="score-val">6.5</span></div>
+      <div class="bar"><i style="width:65%"></i></div>
+      <div class="score-note">无 MVVM 上帝类；线程纪律与运行状态机相当扎实。</div>
+    </div>
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">测试充分性</span><span class="score-val">6.5</span></div>
+      <div class="bar"><i style="width:65%"></i></div>
+      <div class="score-note">聚焦执行安全、质量高；校验器约 2/3 规则未测，覆盖不均。</div>
+    </div>
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">安全与健壮性</span><span class="score-val">8.0*</span></div>
+      <div class="bar"><i style="width:60%"></i></div>
+      <div class="score-note">*评分与其自认的两个高危发现不匹配，实际应按 6 分左右看待。</div>
+    </div>
+    <div class="score-card">
+      <div class="score-top"><span class="score-name">工程化与文档</span><span class="score-val">8.0</span></div>
+      <div class="bar"><i style="width:80%"></i></div>
+      <div class="score-note">文档 5 项声称全部核实属实；release 打包存在预计必失败的缺陷。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 高危问题 ================= -->
+<section id="high">
+  <div class="sec-head">
+    <div class="kicker">02 · HIGH SEVERITY</div>
+    <h2>已确认的高危问题</h2>
+    <p>以下每项都经独立的怀疑者代理阅读实际代码后确认（30/32 核实通过，0 项被驳回）。</p>
+  </div>
+
+  <div class="finding">
+    <div class="finding-head">
+      <h3>1. YAML 往返静默腐蚀 "null" / "~" 字符串 —— 数据损坏</h3>
+      <span class="chip high">HIGH</span><span class="chip verified">已核实</span>
+    </div>
+    <span class="filepath">TestFramework.SequenceYaml/TestSequenceYamlService.cs:11</span>
+    <p>实测（YamlDotNet 16.3.0）：<code>Variables/Settings/Parameters</code> 中的字符串值 <code>"null"</code>、<code>"~"</code>、<code>"Null"</code> 保存时被序列化为不加引号的标量，重新加载后变成 <code>null</code>。<strong>这与项目拒绝注释/锚点的全部理由（往返保真）直接冲突</strong>，用户数据在无提示下被篡改。</p>
+    <div class="fix"><b>修复建议</b>在 SerializerBuilder 上挂自定义 IEventEmitter，对 null 类词强制单引号标量；补 "null"/"~" 字符串往返单元测试。</div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-head">
+      <h3>2. release 打包预计必失败（NU5039）</h3>
+      <span class="chip high">HIGH</span><span class="chip verified">已核实</span>
+    </div>
+    <span class="filepath">Directory.Build.props:9-11</span>
+    <p><code>Condition="'$(IsPackable)' == 'true'"</code> 因 MSBuild 求值顺序<strong>恒为 false</strong>（props 在 csproj 正文前求值），README.md 永远不会进包；而无条件设置的 <code>PackageReadmeFile</code> 又要求它必须在包内。release.yml 的 <code>dotnet pack</code> 很可能从未成功过。</p>
+    <div class="fix"><b>修复建议</b>移到 Directory.Build.targets 或去掉 Condition；在 PR CI 加一次 dotnet pack 冒烟验证 release 路径。</div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-head">
+      <h3>3. 深度嵌套 YAML 栈溢出 → 进程级持久化启动崩溃（已实测复现）</h3>
+      <span class="chip high">HIGH</span><span class="chip verified">已核实</span>
+    </div>
+    <span class="filepath">TestFramework.SequenceYaml/TestSequenceYamlService.cs:33 · TestFramework.App/Services/SequenceDocumentStore.cs:76</span>
+    <p>YamlDotNet 解析深嵌套文档直接 StackOverflow 杀进程，<code>catch (Exception)</code> 拦不住；启动时加载序列目录即触发——<strong>一个损坏文件让应用再也起不来</strong>。</p>
+    <div class="fix"><b>修复建议</b>解析前限制文档嵌套深度（预扫描缩进层级），坏文件隔离而非整进程崩溃。</div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-head">
+      <h3>4. UI 层三项高危：删除无确认 · async void 无兜底 · 1847 行上帝类</h3>
+      <span class="chip high">HIGH</span><span class="chip verified">已核实</span>
+    </div>
+    <span class="filepath">TestFramework.App/Views/SequenceEditorView.axaml.cs</span>
+    <p><strong>删除磁盘序列文件无任何确认</strong>（:864-892），不进回收站，与关闭流程的三选确认形成反差。
+    <strong>部分 async void 处理器无兜底 catch</strong>（:1312-1346 及 StepEditorWindow 构造），第三方插件代码抛异常可直接终止进程。
+    <strong>无 MVVM</strong>：ViewModels/Controls/Models 三个目录为空，全部状态与逻辑集中在 1847 行代码隐藏中，测试被迫用反射调私有方法。</p>
+    <div class="fix"><b>修复建议</b>删除加确认对话框；async void 统一兜底；把 UI 无关逻辑（克隆、变量改名、判定写入）下沉为可独立测试的文档服务类。</div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-head">
+      <h3>5. 插件体系：机制先进、收尾粗糙</h3>
+      <span class="chip high">HIGH</span><span class="chip verified">已核实（核后降为 MEDIUM）</span>
+    </div>
+    <span class="filepath">TestFramework.Core/Plugins/PluginLoader.cs:29,95-114 · PluginAssemblyCatalog.cs:36-54</span>
+    <p><strong>逐类型故障隔离弱于资源插件</strong>：一个坏类型拖垮整个程序集，与 ResourcePluginLoader 的逐类型捕获不一致。
+    <strong>目录扫描噪音</strong>：原生/依赖 DLL 都被当插件加载，失败报告误导用户。
+    <strong>卸载名存实亡</strong>：插件注册后引用链永久根化，DLL 更新必须重启进程，<strong>且文档完全未声明</strong>。</p>
+    <div class="fix"><b>修复建议</b>统一两个加载器隔离粒度（ReflectionTypeLoadException 抢救 ex.Types）；加载前轻量过滤候选 DLL；文档补齐"不可卸载/更新需重启/共享程序集清单"。</div>
+  </div>
+</section>
+
+<!-- ================= 中危一览 ================= -->
+<section id="medium">
+  <div class="sec-head">
+    <div class="kicker">03 · MEDIUM SEVERITY</div>
+    <h2>已确认的中危问题一览</h2>
+  </div>
+  <div class="tablebox">
+    <table>
+      <thead><tr><th>问题</th><th>位置</th><th>要点</th></tr></thead>
+      <tbody>
+        <tr><td class="t">取消时 cleanup 被整体跳过/打断</td><td><code>TestSequenceRunner.cs:144-161</code></td><td>与 Stop/JumpToCleanup 语义不一致，被测硬件状态恢复有实际风险</td></tr>
+        <tr><td class="t">Observer 回调异常未隔离</td><td><code>TestSequenceRunner.cs:284</code></td><td>finally 中 ItemFinished 抛错可掩盖取消语义并丢失全部运行结果</td></tr>
+        <tr><td class="t">变量快照浅拷贝</td><td><code>TestSequenceRunner.cs:278</code></td><td>插件原地修改引用类型值可穿透事务边界，污染运行状态与快照记录</td></tr>
+        <tr><td class="t">资源插件契约依赖具体类</td><td><code>IInstrumentDriverPlugin.cs:13</code></td><td>插件可篡改/提前释放宿主资源容器；实现类混入契约包 Abstractions</td></tr>
+        <tr><td class="t">YAML 重复键静默覆盖</td><td><code>TestSequenceYamlService.cs:16</code></td><td>后值覆盖前值无提示；枚举字段接受未定义数值且校验不拦截</td></tr>
+        <tr><td class="t">校验器不检查资源插件是否注册</td><td><code>TestSequenceValidator.cs:119</code></td><td>仪器/传输/服务插件缺失运行时才暴露</td></tr>
+        <tr><td class="t">µ（U+00B5）微符号不归一化</td><td><code>UnitConverter.cs:129-134</code></td><td>常见 "µV/µA/µs" 输入静默判 Inconclusive，只处理了 U+03BC</td></tr>
+        <tr><td class="t">版本全链路精确匹配</td><td><code>PluginRegistry.cs:65-71</code></td><td>无兼容策略；插件升版本即静默丢失编辑器界面</td></tr>
+        <tr><td class="t">"另存为"不让选路径；StepEditor 无回滚</td><td><code>SequenceDocumentStore.cs:123-142</code></td><td>编辑器直接改共享模型，关闭即标脏</td></tr>
+        <tr><td class="t">插件目录可写即代码执行</td><td><code>PluginLoader.cs:29</code></td><td>无签名校验；设计上可接受但信任边界无文档</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ================= 测试与文档 ================= -->
+<section id="tests">
+  <div class="sec-head">
+    <div class="kicker">04 · TESTS &amp; DOCS</div>
+    <h2>测试充分性与文档准确性</h2>
+  </div>
+  <div class="cols">
+    <div class="panel">
+      <h3>测试：70 通过 / 0 失败 / 0 跳过（实测）</h3>
+      <p>测试策略聚焦"执行安全"：取消、插件自取消与框架超时区分、非协作超时隔离（PendingStepsCompletion）、三种错误策略、判定换算、ReDoS 防护、变量写回、资源失败路径，断言具体、质量高。</p>
+      <ul>
+        <li><strong>Enabled=false 跳过行为零覆盖</strong>（item/step 跳过及 Pass-or-Skipped 聚合分支）</li>
+        <li>TestSequenceValidator 约 <strong>2/3 规则未测</strong>（现有 7 用例）</li>
+        <li>PluginLoader 失败路径、BasicSteps 的 Delay/Log/Throw、SettingsMap 未测</li>
+        <li>个别过宽断言（ThrowsAny）、反射强耦合、四份近似重复的插件 stub</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>文档：5 项声称全部核实属实</h3>
+      <p>抽查 README/ARCHITECTURE 的 5 条具体行为声称——拒绝锚点/别名、100ms 隔离阈值、超时必须为正整数、HasPendingExecution、清理失败阻止后续运行——<strong>全部在代码中验证通过且有对应测试</strong>，未发现夸大或失实。</p>
+      <ul>
+        <li>README 项目清单漏列 <code>TestFramework.App.Tests</code></li>
+        <li>插件生命周期（不可卸载、更新需重启）无文档</li>
+        <li>CI 双平台矩阵真实跑测试并有 NuGet 缓存；Linux 腿跳过 App.Tests</li>
+        <li>.gitignore 缺 <code>.serena/</code>、<code>*.nupkg</code>、<code>results/</code> 等条目</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 盲区 ================= -->
+<section id="blindspots">
+  <div class="sec-head">
+    <div class="kicker">05 · BLIND SPOTS</div>
+    <h2>完整性检查发现的项目盲区</h2>
+    <p>最后的完整性批评代理通览仓库后，指出八维度评估之外真实存在但被遗漏的项目问题。</p>
+  </div>
+  <div class="blind-list">
+    <div class="blind"><div><h3>数据路径全部硬编码在程序目录下</h3><p>插件目录、<code>config/sequence</code>、<code>results</code> 全部在 <code>AppContext.BaseDirectory</code> 下（SequenceEditorView.axaml.cs:228,398-402），无 %AppData% 回退——安装到 Program Files 等只读位置时保存与写结果直接失败；主题切换不持久化；results 只写不读、无限堆积。</p></div></div>
+    <div class="blind"><div><h3>无撤销体系</h3><p>删除步骤、拖拽移动/复制、参数编辑全部不可撤销；模型对象被事件处理器原地修改，误操作无回退路径；全库无 AutomationProperties，键盘可达性缺失。</p></div></div>
+    <div class="blind"><div><h3>日志 O(n²) 且无日志框架</h3><p><code>LogBox.Text +=</code> 逐行拼接（:752），每步一次 Dispatcher.Post 无节流，大序列下 UI 线程被事件洪峰占满；长序列运行时内存无界增长。</p></div></div>
+    <div class="blind"><div><h3>拖拽链路缺陷</h3><p><code>TestStepDefinition.Clone</code> 对非 POCO 参数抛 InvalidOperationException（:73）——插件放入不可克隆参数时 Ctrl+拖拽复制即崩；约 200 行近期高频改动的拖拽逻辑测试最薄。</p></div></div>
+    <div class="blind"><div><h3>示例文件无自动化校验</h3><p><code>Samples/sample-sequence.yaml</code> 是用户最主要的模仿对象，但全库无测试或 CI 步骤引用它，与校验器规则漂移不会被发现。强制软件渲染（Program.cs:17-21）无注释说明动机。</p></div></div>
+  </div>
+</section>
+
+<!-- ================= 行动建议 ================= -->
+<section id="plan">
+  <div class="sec-head">
+    <div class="kicker">06 · ACTION PLAN</div>
+    <h2>优先行动建议</h2>
+  </div>
+  <div class="tiers">
+    <div class="tier p0">
+      <div class="tier-head"><span class="tier-tag">P0</span><span>数据安全 / 崩溃 / 发布阻断</span></div>
+      <ul>
+        <li>修 YAML <strong>"null"/"~" 字符串腐蚀</strong>：IEventEmitter 强制加引号 + 往返测试</li>
+        <li>修 <strong>Directory.Build.props 打包条件</strong>：移到 .targets 或去 Condition，CI 加 pack 冒烟</li>
+        <li><strong>防深嵌套 YAML 崩溃</strong>：解析前限制嵌套深度，坏文件隔离</li>
+        <li><strong>async void 加统一兜底</strong>，插件设置编辑器调用整体包 try</li>
+        <li><strong>删除文件加确认</strong>对话框</li>
+      </ul>
+    </div>
+    <div class="tier p1">
+      <div class="tier-head"><span class="tier-tag">P1</span><span>插件生命周期诚实化</span></div>
+      <ul>
+        <li>文档补齐：<strong>不可卸载 / 更新需重启 / 信任边界 / 共享程序集清单</strong></li>
+        <li>统一两个加载器的逐类型故障隔离；DLL 候选轻量过滤</li>
+        <li><strong>归一化 U+00B5 微符号</strong>；隔离 observer 回调异常</li>
+        <li>对齐取消时的 cleanup 语义；变量快照改深拷贝或冻结</li>
+        <li>资源插件契约改依赖只读接口，<code>RuntimeResourceProvider</code> 下沉 Core</li>
+      </ul>
+    </div>
+    <div class="tier p2">
+      <div class="tier-head"><span class="tier-tag">P2</span><span>结构性改进</span></div>
+      <ul>
+        <li>上帝类下沉可测试的 EditorState / 文档服务，中期引入 CommunityToolkit.Mvvm</li>
+        <li>补校验器规则（Theory 参数化）与 Enabled 跳过行为测试</li>
+        <li>sample-sequence.yaml 纳入校验测试，防示例漂移</li>
+        <li>.gitignore 补 <code>.serena/</code>、<code>*.nupkg</code>、<code>results/</code></li>
+        <li>评估数据目录可配置化（%AppData% 回退）、撤销体系、日志框架与节流</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span>评估方法：8 维度并行评估 → 32 项重要发现对抗性核实 → 完整性检查</span>
+  <span class="mono">41 agents · 863 tool calls · 0 refuted</span>
+  <span>TestFramework · .NET 10 + Avalonia · ~9500 行 C#</span>
+</footer>
+
+</div>
+</body>
+</html>

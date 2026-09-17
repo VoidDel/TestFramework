@@ -13,6 +13,11 @@ public sealed class TestSequenceRunner
     private readonly IPluginRegistry _pluginRegistry;
     private readonly ITestExecutionObserver _observer;
     private readonly RuntimeResourceProvider _resources;
+    private int _running;
+    private bool _abandonedStep;
+
+    // Hosts must await this before disposing resources or reusing plugin instances.
+    public Task PendingStepsCompletion { get; private set; } = Task.CompletedTask;
 
     public TestSequenceRunner(
         IPluginRegistry pluginRegistry,
@@ -27,7 +32,30 @@ public sealed class TestSequenceRunner
     public async Task<TestSequenceRunResult> RunAsync(TestSequence sequence, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sequence);
+        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("The previous run or its pending step has not finished.");
+        }
 
+        try
+        {
+            _abandonedStep = false;
+            return await RunCoreAsync(sequence, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            PendingStepsCompletion = ReleaseRunnerAsync(PendingStepsCompletion);
+        }
+    }
+
+    private async Task ReleaseRunnerAsync(Task pendingSteps)
+    {
+        await pendingSteps.ConfigureAwait(false);
+        Volatile.Write(ref _running, 0);
+    }
+
+    private async Task<TestSequenceRunResult> RunCoreAsync(TestSequence sequence, CancellationToken cancellationToken)
+    {
         var result = new TestSequenceRunResult
         {
             SequenceId = sequence.Id,
@@ -39,92 +67,104 @@ public sealed class TestSequenceRunner
         _observer.SequenceStarted(sequence);
 
         var variables = new Dictionary<string, object?>(sequence.Variables, StringComparer.OrdinalIgnoreCase);
-        var stopSequence = false;
-
-        foreach (var item in sequence.Items)
+        var cancelled = false;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!item.Enabled)
+            foreach (var item in sequence.Items)
             {
-                result.ItemResults.Add(CreateSkippedItemResult(item));
-                continue;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!item.Enabled)
+                {
+                    result.ItemResults.Add(CreateSkippedItemResult(item));
+                    continue;
+                }
 
-            var itemResult = await RunItemAsync(sequence, item, variables, cancellationToken).ConfigureAwait(false);
-            result.ItemResults.Add(itemResult);
+                var itemResult = new TestItemRunResult
+                {
+                    ItemId = item.Id,
+                    ItemName = item.Name,
+                    StartedAt = DateTimeOffset.Now
+                };
+                result.ItemResults.Add(itemResult);
+                await RunItemAsync(sequence, item, itemResult, variables, cancellationToken).ConfigureAwait(false);
 
-            if (itemResult.Verdict == TestVerdict.Error &&
-                (item.MainSteps.Count == 0 || HasStopError(item, itemResult)))
-            {
-                stopSequence = true;
+                if (_abandonedStep || (itemResult.Verdict == TestVerdict.Error &&
+                    (item.MainSteps.Count == 0 || HasStopError(item, itemResult))))
+                {
+                    break;
+                }
             }
-
-            if (stopSequence)
-            {
-                break;
-            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            cancelled = true;
         }
 
         result.FinishedAt = DateTimeOffset.Now;
-        result.Verdict = AggregateSequenceVerdict(result.ItemResults);
+        result.Verdict = cancelled ? TestVerdict.Cancelled : AggregateSequenceVerdict(result.ItemResults);
+        result.HasPendingExecution = _abandonedStep;
         result.FinalVariables = new Dictionary<string, object?>(variables, StringComparer.OrdinalIgnoreCase);
         _observer.SequenceFinished(sequence, result);
+
+        if (cancelled) throw new TestSequenceCancelledException(result, cancellationToken);
 
         return result;
     }
 
-    private async Task<TestItemRunResult> RunItemAsync(
+    private async Task RunItemAsync(
         TestSequence sequence,
         TestItemDefinition item,
+        TestItemRunResult result,
         IDictionary<string, object?> variables,
         CancellationToken cancellationToken)
     {
-        var result = new TestItemRunResult
-        {
-            ItemId = item.Id,
-            ItemName = item.Name,
-            StartedAt = DateTimeOffset.Now
-        };
-
         var stepResults = new Dictionary<string, TestStepResult>(StringComparer.OrdinalIgnoreCase);
         var flow = FlowDecision.Continue;
 
         _observer.ItemStarted(item);
 
-        if (item.MainSteps.Count == 0)
+        try
         {
-            flow = FlowDecision.StopSequence;
-        }
-        else
-        {
-            flow = await RunSectionAsync(sequence, item, StepSection.Init, item.InitSteps, result.InitResults, stepResults, variables, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (flow == FlowDecision.Continue)
+            if (item.MainSteps.Count == 0)
             {
-                flow = await RunSectionAsync(sequence, item, StepSection.Main, item.MainSteps, result.MainResults, stepResults, variables, cancellationToken)
+                flow = FlowDecision.StopSequence;
+            }
+            else
+            {
+                flow = await RunSectionAsync(sequence, item, StepSection.Init, item.InitSteps, result.InitResults, stepResults, variables, cancellationToken)
                     .ConfigureAwait(false);
-            }
-        }
 
-        if (item.CleanupSteps.Count > 0)
-        {
-            var cleanupFlow = await RunSectionAsync(sequence, item, StepSection.Cleanup, item.CleanupSteps, result.CleanupResults, stepResults, variables, cancellationToken)
-                .ConfigureAwait(false);
-            if (flow == FlowDecision.Continue && cleanupFlow != FlowDecision.Continue)
+                if (flow == FlowDecision.Continue)
+                {
+                    flow = await RunSectionAsync(sequence, item, StepSection.Main, item.MainSteps, result.MainResults, stepResults, variables, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+
+            if (!_abandonedStep && item.CleanupSteps.Count > 0)
             {
-                flow = cleanupFlow;
+                var cleanupFlow = await RunSectionAsync(sequence, item, StepSection.Cleanup, item.CleanupSteps, result.CleanupResults, stepResults, variables, cancellationToken)
+                    .ConfigureAwait(false);
+                if (flow == FlowDecision.Continue && cleanupFlow != FlowDecision.Continue)
+                {
+                    flow = cleanupFlow;
+                }
             }
+
+            result.VerdictSourceStepResult = ResolveVerdictSource(item, result.MainResults);
+            result.Verdict = ResolveItemVerdict(item, result, flow);
         }
-
-        result.VerdictSourceStepResult = ResolveVerdictSource(item, result.MainResults);
-        result.Verdict = ResolveItemVerdict(item, result, flow);
-        result.FinishedAt = DateTimeOffset.Now;
-        result.VariablesAfter = new Dictionary<string, object?>(variables, StringComparer.OrdinalIgnoreCase);
-
-        _observer.ItemFinished(item, result);
-        return result;
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            result.Verdict = TestVerdict.Cancelled;
+            throw;
+        }
+        finally
+        {
+            result.FinishedAt = DateTimeOffset.Now;
+            result.VariablesAfter = new Dictionary<string, object?>(variables, StringComparer.OrdinalIgnoreCase);
+            _observer.ItemFinished(item, result);
+        }
     }
 
     private async Task<FlowDecision> RunSectionAsync(
@@ -150,11 +190,36 @@ public sealed class TestSequenceRunner
             }
 
             _observer.StepStarted(item, step, section);
-            var stepResult = await RunStepAsync(sequence, item, step, stepResults, variables, cancellationToken).ConfigureAwait(false);
-            ApplyVariableWrites(step, stepResult, variables);
+            var startedAt = DateTimeOffset.Now;
+            TestStepResult stepResult;
+            try
+            {
+                stepResult = await RunStepAsync(sequence, item, step, stepResults, variables, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            {
+                stepResult = CreateErrorResult(step, startedAt, "Step was cancelled.", ex);
+                stepResult.Verdict = TestVerdict.Cancelled;
+                resultList.Add(stepResult);
+                stepResults[step.Id] = stepResult;
+                _observer.StepFinished(item, step, section, stepResult);
+                throw;
+            }
+            try
+            {
+                if (!_abandonedStep) ApplyVariableWrites(step, stepResult, variables);
+            }
+            catch (Exception ex)
+            {
+                stepResult.Verdict = TestVerdict.Error;
+                stepResult.ErrorMessage = ex.Message;
+                stepResult.Exception = ex;
+            }
             resultList.Add(stepResult);
             stepResults[step.Id] = stepResult;
             _observer.StepFinished(item, step, section, stepResult);
+
+            if (_abandonedStep) return FlowDecision.StopSequence;
 
             if (stepResult.Verdict != TestVerdict.Error)
             {
@@ -187,12 +252,13 @@ public sealed class TestSequenceRunner
     {
         var startedAt = DateTimeOffset.Now;
         CancellationTokenSource? timeoutCts = null;
+        Task<TestStepResult>? execution = null;
 
         try
         {
             var plugin = _pluginRegistry.GetRequired(step.PluginId, step.PluginVersion);
             var resolvedParameters = VariableResolver.ResolveDictionary(step.Parameters, variables);
-            var settings = plugin.LoadSettings(resolvedParameters);
+            if (step.TimeoutMs is <= 0) throw new ArgumentOutOfRangeException(nameof(step.TimeoutMs), "Timeout must be positive or omitted.");
             var timeoutMs = step.TimeoutMs.GetValueOrDefault();
             timeoutCts = timeoutMs > 0
                 ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
@@ -209,7 +275,7 @@ public sealed class TestSequenceRunner
                 Sequence = sequence,
                 Item = item,
                 Step = step,
-                Variables = variables,
+                Variables = new Dictionary<string, object?>(variables, StringComparer.OrdinalIgnoreCase),
                 ResolvedParameters = resolvedParameters,
                 PreviousStepResults = previousStepResults,
                 Instruments = _resources,
@@ -218,9 +284,19 @@ public sealed class TestSequenceRunner
                 Log = message => _observer.Log($"[{item.Name}/{step.Name}] {message}")
             };
 
-            var result = await plugin.ExecuteAsync(context, settings, effectiveToken).ConfigureAwait(false);
-            result.StepId = string.IsNullOrWhiteSpace(result.StepId) ? step.Id : result.StepId;
-            result.StepName = string.IsNullOrWhiteSpace(result.StepName) ? step.Name : result.StepName;
+            // Include synchronous plugin code in the bounded wait and keep it off the UI thread.
+            execution = Task.Run(async () =>
+            {
+                effectiveToken.ThrowIfCancellationRequested();
+                var settings = plugin.LoadSettings(resolvedParameters);
+                return await plugin.ExecuteAsync(context, settings, effectiveToken).ConfigureAwait(false);
+            }, CancellationToken.None);
+            var result = await execution.WaitAsync(effectiveToken).ConfigureAwait(false);
+            effectiveToken.ThrowIfCancellationRequested();
+            variables.Clear();
+            foreach (var (name, value) in context.Variables) variables[name] = value;
+            result.StepId = step.Id;
+            result.StepName = step.Name;
             result.StartedAt = result.StartedAt == default ? startedAt : result.StartedAt;
             result.FinishedAt = result.FinishedAt == default ? DateTimeOffset.Now : result.FinishedAt;
             return result;
@@ -245,8 +321,30 @@ public sealed class TestSequenceRunner
         }
         finally
         {
-            timeoutCts?.Dispose();
+            if (execution is { IsCompleted: false })
+            {
+                // Give cooperative cancellation a short grace period before quarantining the run.
+                try { await execution.WaitAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false); }
+                catch (Exception) { /* The step error is already recorded; observe late faults below. */ }
+            }
+            if (execution is { IsCompleted: false })
+            {
+                _abandonedStep = true;
+                PendingStepsCompletion = ObservePendingStepAsync(execution, timeoutCts);
+            }
+            else
+            {
+                _ = execution?.Exception;
+                timeoutCts?.Dispose();
+            }
         }
+    }
+
+    private static async Task ObservePendingStepAsync(Task execution, CancellationTokenSource? timeoutCts)
+    {
+        try { await execution.ConfigureAwait(false); }
+        catch (Exception) { /* Timeout/cancellation has already been reported. */ }
+        finally { timeoutCts?.Dispose(); }
     }
 
     private static TestStepResult CreateErrorResult(TestStepDefinition step, DateTimeOffset startedAt, string message, Exception? exception)
@@ -285,7 +383,7 @@ public sealed class TestSequenceRunner
             {
                 if (!stepResult.Outputs.TryGetValue(write.OutputKey, out value))
                 {
-                    continue;
+                    throw new InvalidOperationException($"Output '{write.OutputKey}' for variable '{write.Name}' was not produced.");
                 }
             }
             else
@@ -339,10 +437,11 @@ public sealed class TestSequenceRunner
             return TestVerdict.Error;
         }
 
-        if (!string.IsNullOrWhiteSpace(item.VerdictSource.OutputKey) &&
-            verdictSource.Outputs.TryGetValue(item.VerdictSource.OutputKey, out var value))
+        if (!string.IsNullOrWhiteSpace(item.VerdictSource.OutputKey))
         {
-            return ResolveConfiguredVerdict(item.VerdictSource, value);
+            return verdictSource.Outputs.TryGetValue(item.VerdictSource.OutputKey, out var value)
+                ? ResolveConfiguredVerdict(item.VerdictSource, value)
+                : TestVerdict.Error;
         }
 
         return item.VerdictSource.JudgeType == VerdictJudgeType.PassFail

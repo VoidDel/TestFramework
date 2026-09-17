@@ -119,13 +119,27 @@ public sealed class RuntimeResourceProvider :
         }
 
         _disposed = true;
+        var errors = new List<Exception>();
         foreach (var resource in GetDisposableResources())
         {
-            if (resource is IDisposable disposable)
+            try
             {
-                disposable.Dispose();
+                if (resource is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+                else if (resource is IAsyncDisposable asyncDisposable)
+                {
+                    asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
             }
         }
+
+        if (errors.Count > 0) throw new AggregateException("Runtime resource cleanup failed.", errors);
     }
 
     public async ValueTask DisposeAsync()
@@ -136,17 +150,27 @@ public sealed class RuntimeResourceProvider :
         }
 
         _disposed = true;
+        var errors = new List<Exception>();
         foreach (var resource in GetDisposableResources())
         {
-            if (resource is IAsyncDisposable asyncDisposable)
+            try
             {
-                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                if (resource is IAsyncDisposable asyncDisposable)
+                {
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                }
+                else if (resource is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
             }
-            else if (resource is IDisposable disposable)
+            catch (Exception ex)
             {
-                disposable.Dispose();
+                errors.Add(ex);
             }
         }
+
+        if (errors.Count > 0) throw new AggregateException("Runtime resource cleanup failed.", errors);
     }
 
     private IReadOnlyList<object> GetDisposableResources()

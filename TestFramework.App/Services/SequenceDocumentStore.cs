@@ -12,9 +12,13 @@ public sealed class SequenceDocument
 
     public DateTimeOffset? LastKnownWriteTimeUtc { get; set; }
 
+    public bool IsDirty { get; set; }
+
+    public int Revision { get; set; }
+
     public string? LastKnownContentHash { get; set; }
 
-    public string Name => Sequence.Name;
+    public string Name => Sequence.Name + (IsDirty ? " *" : string.Empty);
 }
 
 public sealed class SequenceDocumentLoadFailure

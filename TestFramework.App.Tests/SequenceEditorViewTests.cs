@@ -10,6 +10,7 @@ using Xunit;
 
 namespace TestFramework.App.Tests;
 
+[Collection("Avalonia UI")]
 public sealed class SequenceEditorViewTests
 {
     [Fact]

@@ -10,6 +10,11 @@ public sealed class TestSequenceRunResult
 
     public TestVerdict Verdict { get; set; } = TestVerdict.None;
 
+    // True when an in-process plugin was still executing when this result was returned.
+    public bool HasPendingExecution { get; set; }
+
+    public List<string> ResourceErrors { get; } = [];
+
     public DateTimeOffset StartedAt { get; set; }
 
     public DateTimeOffset FinishedAt { get; set; }

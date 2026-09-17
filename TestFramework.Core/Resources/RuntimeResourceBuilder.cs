@@ -18,6 +18,11 @@ public sealed class RuntimeResourceBuilder
     {
         ArgumentNullException.ThrowIfNull(sequence);
 
+        // Resolve every plugin before opening the first resource.
+        foreach (var definition in sequence.Instruments) _plugins.GetRequiredInstrumentDriver(definition.DriverId, definition.DriverVersion);
+        foreach (var definition in sequence.Transports) _plugins.GetRequiredTransport(definition.TransportId, definition.TransportVersion);
+        foreach (var definition in sequence.Services) _plugins.GetRequiredService(definition.ServiceId, definition.ServiceVersion);
+
         var resources = new RuntimeResourceProvider();
 
         try
@@ -46,9 +51,16 @@ public sealed class RuntimeResourceBuilder
                     await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
             }
         }
-        catch
+        catch (Exception buildError)
         {
-            await resources.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await resources.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception cleanupError)
+            {
+                throw new AggregateException("Resource initialization and cleanup failed.", buildError, cleanupError);
+            }
             throw;
         }
 

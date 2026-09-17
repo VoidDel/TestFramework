@@ -44,16 +44,21 @@ public static partial class VariableResolver
         if (matches.Count == 1 && matches[0].Index == 0 && matches[0].Length == text.Length)
         {
             var name = matches[0].Groups["name"].Value;
-            return variables.TryGetValue(name, out var value) ? value : text;
+            return GetRequiredVariable(name, variables);
         }
 
         return VariablePattern().Replace(text, match =>
         {
             var name = match.Groups["name"].Value;
-            return variables.TryGetValue(name, out var value)
-                ? Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
-                : match.Value;
+            return Convert.ToString(GetRequiredVariable(name, variables), CultureInfo.InvariantCulture) ?? string.Empty;
         });
+    }
+
+    private static object? GetRequiredVariable(string name, IDictionary<string, object?> variables)
+    {
+        return variables.TryGetValue(name, out var value)
+            ? value
+            : throw new InvalidOperationException($"Variable '{name}' is not defined.");
     }
 
     [GeneratedRegex(@"\$\{(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\}")]

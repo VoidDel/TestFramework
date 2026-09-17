@@ -6,6 +6,16 @@ namespace TestFramework.Tests;
 
 public sealed class TestSequenceYamlServiceTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(999)]
+    public void LoadAndSave_RejectUnsupportedSchemaVersion(int version)
+    {
+        var service = new TestSequenceYamlService();
+        Assert.Throws<InvalidDataException>(() => service.Load($"schemaVersion: {version}\nname: Sequence"));
+        Assert.Throws<InvalidDataException>(() => service.Save(new TestSequence { SchemaVersion = version }));
+    }
+
     [Fact]
     public void SaveAndLoad_RoundTripsSectionsAndVerdictSource()
     {

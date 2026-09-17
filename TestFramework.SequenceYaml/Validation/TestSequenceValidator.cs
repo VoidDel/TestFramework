@@ -16,6 +16,11 @@ public sealed class TestSequenceValidator
     {
         var issues = new List<ValidationIssue>();
 
+        if (sequence.SchemaVersion != 1)
+        {
+            issues.Add(new ValidationIssue { Path = "schemaVersion", Message = "Only schemaVersion 1 is supported." });
+        }
+
         if (string.IsNullOrWhiteSpace(sequence.Name))
         {
             issues.Add(new ValidationIssue { Path = "name", Message = "Sequence name is required." });
@@ -121,6 +126,7 @@ public sealed class TestSequenceValidator
             var instrument = instruments[index];
             var path = $"instruments[{index}]";
             ValidateId(instrument.Id, path, "Instrument ID", ids, issues);
+            ValidateVersion(instrument.DriverVersion, $"{path}.driverVersion", issues);
 
             if (string.IsNullOrWhiteSpace(instrument.DriverId))
             {
@@ -142,6 +148,7 @@ public sealed class TestSequenceValidator
             var transport = transports[index];
             var path = $"transports[{index}]";
             ValidateId(transport.Id, path, "Transport ID", ids, issues);
+            ValidateVersion(transport.TransportVersion, $"{path}.transportVersion", issues);
 
             if (string.IsNullOrWhiteSpace(transport.TransportId))
             {
@@ -168,6 +175,7 @@ public sealed class TestSequenceValidator
             var service = services[index];
             var path = $"services[{index}]";
             ValidateId(service.Id, path, "Service ID", ids, issues);
+            ValidateVersion(service.ServiceVersion, $"{path}.serviceVersion", issues);
 
             if (string.IsNullOrWhiteSpace(service.ServiceId))
             {
@@ -210,6 +218,11 @@ public sealed class TestSequenceValidator
             var stepPath = $"{path}[{stepIndex}]";
 
             ValidateId(step.Id, stepPath, "Test step ID", stepIds, issues);
+            ValidateVersion(step.PluginVersion, $"{stepPath}.pluginVersion", issues);
+            if (step.TimeoutMs is <= 0)
+            {
+                issues.Add(new ValidationIssue { Path = $"{stepPath}.timeoutMs", Message = "Timeout must be positive or omitted." });
+            }
 
             if (string.IsNullOrWhiteSpace(step.Name))
             {
@@ -226,6 +239,14 @@ public sealed class TestSequenceValidator
             }
 
             ValidateVariableWrites(step.VariableWrites, $"{stepPath}.variableWrites", issues);
+        }
+    }
+
+    private static void ValidateVersion(string? version, string path, ICollection<ValidationIssue> issues)
+    {
+        if (!Version.TryParse(version, out _))
+        {
+            issues.Add(new ValidationIssue { Path = path, Message = "A valid plugin version is required." });
         }
     }
 

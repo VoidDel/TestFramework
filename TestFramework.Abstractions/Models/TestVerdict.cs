@@ -7,5 +7,6 @@ public enum TestVerdict
     Fail,
     Error,
     Skipped,
-    Inconclusive
+    Inconclusive,
+    Cancelled
 }

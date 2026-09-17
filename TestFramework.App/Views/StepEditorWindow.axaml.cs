@@ -19,6 +19,7 @@ public sealed partial class StepEditorWindow : Window
     private string? _selectedParameterKey;
     private VariableWriteDefinition? _selectedVariableWrite;
     private bool _updating = true;
+    private bool _timeoutInputValid = true;
 
     public sealed class ErrorHandlingOption
     {
@@ -30,6 +31,7 @@ public sealed partial class StepEditorWindow : Window
     public StepEditorWindow()
     {
         InitializeComponent();
+        Closing += (_, e) => { if (!_timeoutInputValid) e.Cancel = true; };
         ErrorHandlingBox.ItemsSource = CreateErrorHandlingOptions();
     }
 
@@ -98,15 +100,29 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        if (_pluginRegistry is null || !_pluginRegistry.TryGet(_step.PluginId, out var plugin))
+        if (_pluginRegistry is null || !_pluginRegistry.TryGet(_step.PluginId, _step.PluginVersion, out var plugin))
         {
             PluginSettingsContent.Content = new TextBlock { Text = $"未找到插件：{_step.PluginId}" };
             return;
         }
 
-        _settingsPlugin = plugin;
-        _settings = plugin.LoadSettings(_step.Parameters);
-        _settingsBaselineParameters = plugin.SaveSettings(_settings);
+        try
+        {
+            // Variable bindings stay in the model; the editor uses defaults for their preview values.
+            var previewParameters = new Dictionary<string, object?>(plugin.SaveSettings(plugin.CreateDefaultSettings()), StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, value) in _step.Parameters)
+            {
+                if (!EditorValueConverter.IsVariableReference(value)) previewParameters[key] = value;
+            }
+            _settings = plugin.LoadSettings(previewParameters);
+            _settingsBaselineParameters = plugin.SaveSettings(_settings);
+            _settingsPlugin = plugin;
+        }
+        catch (Exception ex)
+        {
+            PluginSettingsContent.Content = new TextBlock { Text = $"配置无效，请在参数列表中修正：{ex.Message}", TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+            return;
+        }
 
         if (_settingsEditorRegistry is not null &&
             _settingsEditorRegistry.TryCreateEditor(
@@ -249,7 +265,19 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        int? timeoutMs = int.TryParse(TimeoutBox.Text, out var timeout) && timeout > 0 ? timeout : null;
+        int? timeoutMs = null;
+        if (!string.IsNullOrWhiteSpace(TimeoutBox.Text))
+        {
+            if (!int.TryParse(TimeoutBox.Text, out var timeout) || timeout <= 0)
+            {
+                _timeoutInputValid = false;
+                DataValidationErrors.SetErrors(TimeoutBox, [new InvalidDataException("超时必须为正整数毫秒，或留空。")]);
+                return;
+            }
+            timeoutMs = timeout;
+        }
+        _timeoutInputValid = true;
+        TimeoutBox.SetValue(DataValidationErrors.ErrorsProperty, null);
         if (_step.TimeoutMs == timeoutMs)
         {
             return;

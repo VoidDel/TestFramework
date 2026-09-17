@@ -185,6 +185,11 @@ public sealed partial class SequenceEditorView : UserControl
 
     private void OnGlobalKeyDown(object? sender, KeyEventArgs e)
     {
+        if (_isRunning && e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key is Key.S or Key.N)
+        {
+            e.Handled = true;
+            return;
+        }
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.S)
         {
             if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
@@ -423,7 +428,8 @@ public sealed partial class SequenceEditorView : UserControl
         _selectedItem = _sequence.Items.FirstOrDefault();
         _selectedStep = null;
         _selectedVariableName = null;
-        ClearDirty();
+        _isDirty = document.IsDirty;
+        UpdateWindowTitle();
     }
 
     private void RefreshAll()
@@ -804,6 +810,7 @@ public sealed partial class SequenceEditorView : UserControl
         var document = CreateNewSequenceDocument();
         _sequenceDocuments.Add(document);
         SetCurrentDocument(document);
+        MarkDirty();
         RefreshAll();
         AppendLog("已新建测试序列。");
     }
@@ -817,9 +824,8 @@ public sealed partial class SequenceEditorView : UserControl
 
         try
         {
-            var file = await _documentStore.SaveAsync(EnsureCurrentDocument());
+            var file = await SaveDocumentAsync(EnsureCurrentDocument());
             RefreshSequenceCombo();
-            ClearDirty();
             SetStatus("保存成功。", StatusKind.Success);
             AppendLog($"已保存：{file}");
         }
@@ -900,17 +906,22 @@ public sealed partial class SequenceEditorView : UserControl
         }
 
         LogBox.Text = string.Empty;
-        _runCts?.Dispose();
-        _runCts = new CancellationTokenSource();
+        var runCancellation = new CancellationTokenSource();
+        _runCts = runCancellation;
         SetRunningState(true);
         try
         {
             var snapshot = _yamlService.Load(_yamlService.Save(_sequence));
-            var result = await _runService.RunAsync(snapshot, new UiExecutionObserver(AppendLog), _runCts.Token);
+            var result = await _runService.RunAsync(snapshot, new UiExecutionObserver(AppendLog), runCancellation.Token);
             var resultFile = await _resultStore.SaveAsync(result);
-            SetStatus($"运行完成：{DisplayFormatters.FormatVerdict(result.Verdict)}",
-                result.Verdict == TestVerdict.Pass ? StatusKind.Success : StatusKind.Error);
+            SetStatus(result.Verdict == TestVerdict.Cancelled ? "运行已取消，部分结果已保存。" : $"运行完成：{DisplayFormatters.FormatVerdict(result.Verdict)}",
+                result.Verdict == TestVerdict.Pass ? StatusKind.Success : result.Verdict == TestVerdict.Cancelled ? StatusKind.Info : StatusKind.Error);
             AppendLog($"结果已保存：{resultFile}");
+            foreach (var error in result.ResourceErrors) AppendLog(error);
+            if (result.HasPendingExecution)
+            {
+                AppendLog("插件未响应停止，已中止序列。后台步骤退出并完成资源清理前不能再次运行。");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -925,7 +936,15 @@ public sealed partial class SequenceEditorView : UserControl
         finally
         {
             SetRunningState(false);
+            _runCts = null;
+            _ = DisposeRunCancellationAsync(runCancellation, _runService.PendingRecovery);
         }
+    }
+
+    private static async Task DisposeRunCancellationAsync(CancellationTokenSource cancellation, Task recovery)
+    {
+        try { await recovery.ConfigureAwait(false); }
+        finally { cancellation.Dispose(); }
     }
 
     private void AddItem_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1679,8 +1698,7 @@ public sealed partial class SequenceEditorView : UserControl
         SaveAsButton.IsEnabled = !isRunning;
         DeleteSequenceButton.IsEnabled = !isRunning;
         SequenceCombo.IsEnabled = !isRunning;
-        IsHitTestVisible = !isRunning;
-        RunButton.IsHitTestVisible = true;
+        SequenceEditingPanel.IsEnabled = !isRunning;
 
         // 运行中：运行按钮切换为“停止”，状态点启动脉冲动画
         RunButton.Classes.Set("success", !isRunning);
@@ -1714,12 +1732,11 @@ public sealed partial class SequenceEditorView : UserControl
     private void MarkDirty()
     {
         _isDirty = true;
-        UpdateWindowTitle();
-    }
-
-    private void ClearDirty()
-    {
-        _isDirty = false;
+        if (_currentDocument is not null)
+        {
+            _currentDocument.IsDirty = true;
+            _currentDocument.Revision++;
+        }
         UpdateWindowTitle();
     }
 
@@ -1739,7 +1756,14 @@ public sealed partial class SequenceEditorView : UserControl
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
+        AttachClosingHandler();
         UpdateWindowTitle();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        DetachClosingHandler();
+        base.OnDetachedFromVisualTree(e);
     }
 
     private void ThemeToggle_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

@@ -56,6 +56,7 @@ public sealed class RuntimeResourceTests
         var disposable = new DisposableResource();
         var registry = new ResourcePluginRegistry();
         registry.RegisterInstrumentDriver(new DisposableInstrumentPlugin(disposable));
+        registry.RegisterTransport(new FailingTransportPlugin());
 
         var sequence = new TestSequence
         {
@@ -73,7 +74,7 @@ public sealed class RuntimeResourceTests
                 new TransportDefinition
                 {
                     Id = "can",
-                    TransportId = "missing.transport",
+                    TransportId = "failing.transport",
                     TransportVersion = "1.0.0"
                 }
             ]
@@ -88,6 +89,63 @@ public sealed class RuntimeResourceTests
     private interface IFakeUdsClient
     {
         string ReadVin();
+    }
+
+    [Fact]
+    public async Task DisposeAsync_AttemptsAllResourcesAndAggregatesErrors()
+    {
+        var provider = new RuntimeResourceProvider();
+        var instrument = new DisposableResource();
+        provider.RegisterInstrument("instrument", instrument);
+        provider.RegisterService("first", new FailingDisposable());
+        provider.RegisterService("second", new FailingDisposable());
+
+        var error = await Assert.ThrowsAsync<AggregateException>(() => provider.DisposeAsync().AsTask());
+        Assert.Equal(2, error.InnerExceptions.Count);
+        Assert.Equal(1, instrument.DisposeAsyncCount);
+        await provider.DisposeAsync();
+        Assert.Equal(1, instrument.DisposeAsyncCount);
+    }
+
+    [Fact]
+    public void Dispose_AttemptsRemainingResourcesAfterFailure()
+    {
+        var provider = new RuntimeResourceProvider();
+        var instrument = new DisposableResource();
+        provider.RegisterService("broken", new FailingDisposable());
+        provider.RegisterInstrument("instrument", instrument);
+        Assert.Throws<AggregateException>(provider.Dispose);
+        Assert.Equal(1, instrument.DisposeAsyncCount);
+    }
+
+    [Fact]
+    public async Task BuildAsync_MissingPluginIsDetectedBeforeOpeningAnyResource()
+    {
+        var resource = new DisposableResource();
+        var registry = new ResourcePluginRegistry();
+        var plugin = new DisposableInstrumentPlugin(resource);
+        registry.RegisterInstrumentDriver(plugin);
+        var sequence = new TestSequence
+        {
+            Instruments = [new InstrumentDefinition { Id = "meter", DriverId = "fake.instrument" }],
+            Transports = [new TransportDefinition { Id = "transport", TransportId = "missing" }]
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new RuntimeResourceBuilder(registry).BuildAsync(sequence));
+        Assert.Equal(0, plugin.CreateCount);
+    }
+
+    private sealed class FailingDisposable : IDisposable, IAsyncDisposable
+    {
+        public void Dispose() => throw new InvalidOperationException("cleanup failed");
+        public ValueTask DisposeAsync() => throw new InvalidOperationException("cleanup failed");
+    }
+
+    private sealed class FailingTransportPlugin : ITransportPlugin
+    {
+        public ResourcePluginDescriptor Descriptor { get; } = new() { PluginId = "failing.transport", DisplayName = "Fail", Version = new(1, 0, 0) };
+        public Type TransportType => typeof(object);
+        public Task<object> CreateAsync(TransportDefinition definition, RuntimeResourceProvider resources, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("creation failed");
     }
 
     private sealed class FakeUdsClient : IFakeUdsClient
@@ -115,6 +173,7 @@ public sealed class RuntimeResourceTests
 
     private sealed class DisposableInstrumentPlugin : IInstrumentDriverPlugin
     {
+        public int CreateCount { get; private set; }
         private readonly DisposableResource _resource;
 
         public DisposableInstrumentPlugin(DisposableResource resource)
@@ -136,6 +195,7 @@ public sealed class RuntimeResourceTests
             RuntimeResourceProvider resources,
             CancellationToken cancellationToken)
         {
+            CreateCount++;
             return Task.FromResult<object>(_resource);
         }
     }

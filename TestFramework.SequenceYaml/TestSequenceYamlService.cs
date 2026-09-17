@@ -31,6 +31,7 @@ public sealed class TestSequenceYamlService
     {
         RejectUnsupportedRoundTripSyntax(yaml);
         var dto = _deserializer.Deserialize<YamlTestSequence>(yaml) ?? new YamlTestSequence();
+        EnsureSupportedSchema(dto.SchemaVersion);
         return dto.ToDomain();
     }
 
@@ -64,7 +65,13 @@ public sealed class TestSequenceYamlService
 
     public string Save(TestSequence sequence)
     {
+        EnsureSupportedSchema(sequence.SchemaVersion);
         return _serializer.Serialize(YamlTestSequence.FromDomain(sequence));
+    }
+
+    private static void EnsureSupportedSchema(int version)
+    {
+        if (version != 1) throw new InvalidDataException($"Unsupported sequence schemaVersion '{version}'. Expected 1.");
     }
 
     private static (string FullPath, string TempPath) PrepareAtomicSave(string filePath)

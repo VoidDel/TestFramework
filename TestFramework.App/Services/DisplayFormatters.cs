@@ -25,6 +25,7 @@ internal static class DisplayFormatters
             TestVerdict.Error => "错误",
             TestVerdict.Skipped => "跳过",
             TestVerdict.Inconclusive => "无结论",
+            TestVerdict.Cancelled => "已取消",
             _ => verdict.ToString()
         };
     }

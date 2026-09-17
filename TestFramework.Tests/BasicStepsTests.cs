@@ -10,6 +10,28 @@ namespace TestFramework.Tests;
 public sealed class BasicStepsTests
 {
     [Theory]
+    [InlineData("${missingMeasurement}")]
+    [InlineData("not-a-number")]
+    [InlineData(null)]
+    [InlineData(double.NaN)]
+    public async Task LimitCheck_InvalidMeasurementNeverFallsBackToPassingDefault(object? value)
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new LimitCheckStepPlugin());
+        var sequence = new TestSequence
+        {
+            Items = [new TestItemDefinition
+            {
+                MainSteps = [new TestStepDefinition { Id = "check", PluginId = "basic.limit-check", Parameters = { ["Value"] = value } }],
+                VerdictSource = new VerdictSource { StepId = "check" }
+            }]
+        };
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+        Assert.Equal(TestVerdict.Error, result.Verdict);
+        Assert.NotNull(result.ItemResults[0].MainResults[0].ErrorMessage);
+    }
+
+    [Theory]
     [InlineData(5.0, TestVerdict.Pass)]
     [InlineData(6.0, TestVerdict.Fail)]
     public async Task LimitCheck_ExecutesThroughTheRunner(double value, TestVerdict expected)

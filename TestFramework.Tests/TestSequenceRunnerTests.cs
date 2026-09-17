@@ -266,6 +266,111 @@ public sealed class TestSequenceRunnerTests
         Assert.Equal(TestVerdict.Inconclusive, Assert.Single(result.ItemResults).Verdict);
     }
 
+    [Fact]
+    public async Task RunAsync_MissingVerdictOutput_IsErrorInsteadOfPass()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new ResultPlugin("pass", TestVerdict.Pass));
+        var sequence = SequenceWithSingleStep("pass", ErrorHandlingMode.Stop);
+        sequence.Items[0].VerdictSource.OutputKey = "typo";
+        Assert.Equal(TestVerdict.Error, (await new TestSequenceRunner(registry).RunAsync(sequence)).Verdict);
+    }
+
+    [Fact]
+    public async Task RunAsync_CancellationPreservesCompletedAndInterruptedSteps()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new ResultPlugin("pass", TestVerdict.Pass));
+        var blocking = new BlockingPlugin();
+        registry.Register(blocking);
+        var sequence = SequenceWithSingleStep("pass", ErrorHandlingMode.Stop);
+        sequence.Items[0].MainSteps[0].VariableWrites.Add(new VariableWriteDefinition { Name = "saved", Value = 42 });
+        sequence.Items[0].MainSteps.Add(Step("wait", "blocking", ErrorHandlingMode.Stop));
+        sequence.Items[0].CleanupSteps.Add(Step("cleanup", "pass", ErrorHandlingMode.Stop));
+        using var cancellation = new CancellationTokenSource();
+        var runner = new TestSequenceRunner(registry);
+        var run = runner.RunAsync(sequence, cancellation.Token);
+        await blocking.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        try
+        {
+            var error = await Assert.ThrowsAsync<TestSequenceCancelledException>(() => run.WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal(TestVerdict.Cancelled, error.Result.Verdict);
+            var item = Assert.Single(error.Result.ItemResults);
+            Assert.Equal(TestVerdict.Cancelled, item.Verdict);
+            Assert.Equal(new[] { TestVerdict.Pass, TestVerdict.Cancelled }, item.MainResults.Select(step => step.Verdict));
+            Assert.Equal(42, error.Result.FinalVariables["saved"]);
+            Assert.Empty(item.CleanupResults);
+            Assert.True(error.Result.FinishedAt >= error.Result.StartedAt);
+        }
+        finally
+        {
+            blocking.Release.TrySetResult();
+            await runner.PendingStepsCompletion;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_UncooperativeTimeout_StopsSequenceAndDefersCleanup(bool synchronous)
+    {
+        var registry = new PluginRegistry();
+        var blocking = new BlockingPlugin { BlockSynchronously = synchronous };
+        registry.Register(blocking);
+        registry.Register(new ResultPlugin("pass", TestVerdict.Pass));
+        var sequence = SequenceWithSingleStep("blocking", ErrorHandlingMode.Continue);
+        sequence.Items[0].MainSteps[0].TimeoutMs = 100;
+        sequence.Items[0].MainSteps.Add(Step("next", "pass", ErrorHandlingMode.Stop));
+        sequence.Items[0].CleanupSteps.Add(Step("cleanup", "pass", ErrorHandlingMode.Stop));
+        var runner = new TestSequenceRunner(registry);
+        try
+        {
+            var result = await runner.RunAsync(sequence).WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(TestVerdict.Error, result.Verdict);
+            Assert.True(result.HasPendingExecution);
+            Assert.False(runner.PendingStepsCompletion.IsCompleted);
+            var item = Assert.Single(result.ItemResults);
+            Assert.Contains("timed out", Assert.Single(item.MainResults).ErrorMessage);
+            Assert.Empty(item.CleanupResults);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(sequence));
+        }
+        finally
+        {
+            blocking.Release.TrySetResult();
+            await runner.PendingStepsCompletion;
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidVariableWrite_BecomesStepErrorAndRunsCleanup()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new ResultPlugin("pass", TestVerdict.Pass));
+        var sequence = SequenceWithSingleStep("pass", ErrorHandlingMode.Stop);
+        sequence.Items[0].MainSteps[0].VariableWrites.Add(new VariableWriteDefinition { Name = "missing", OutputKey = "typo" });
+        sequence.Items[0].CleanupSteps.Add(Step("cleanup", "pass", ErrorHandlingMode.Stop));
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+        Assert.Equal(TestVerdict.Error, result.Verdict);
+        Assert.Single(result.ItemResults[0].CleanupResults);
+        Assert.Contains("typo", result.ItemResults[0].MainResults[0].ErrorMessage);
+    }
+
+    private sealed class BlockingPlugin : ResultPluginBase
+    {
+        public BlockingPlugin() : base("blocking") { }
+        public bool BlockSynchronously { get; init; }
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async Task<TestStepResult> ExecuteAsync(TestStepExecutionContext context, object settings, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            if (BlockSynchronously) Release.Task.GetAwaiter().GetResult();
+            await Release.Task;
+            return new TestStepResult { Verdict = TestVerdict.Pass };
+        }
+    }
+
     private static TestSequence SequenceWithSingleStep(string pluginId, ErrorHandlingMode onError)
     {
         return new TestSequence

@@ -16,4 +16,22 @@
     <ProjectReference Include="..\TestFramework.Plugins.BasicSteps\TestFramework.Plugins.BasicSteps.csproj" />
     <ProjectReference Include="..\TestFramework.SequenceYaml\TestFramework.SequenceYaml.csproj" />
   </ItemGroup>
+
+  <!--
+    A fixture plugin declaring a framework contract this build cannot provide. Referenced without an
+    output assembly so the tests cannot name its types: the point is that the loader refuses it from
+    metadata alone. Its path is passed through so a test can copy the real DLL.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\TestFramework.Tests.IncompatiblePlugin\TestFramework.Tests.IncompatiblePlugin.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="IncompatiblePluginFixture" />
+  </ItemGroup>
+
+  <Target Name="CopyIncompatiblePluginFixture" AfterTargets="Build">
+    <Copy SourceFiles="@(IncompatiblePluginFixture)"
+          DestinationFolder="$(OutDir)Fixtures"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

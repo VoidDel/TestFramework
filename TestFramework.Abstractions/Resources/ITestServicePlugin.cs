@@ -10,6 +10,6 @@ public interface ITestServicePlugin
 
     Task<object> CreateAsync(
         TestServiceDefinition definition,
-        RuntimeResourceProvider resources,
+        IResourceScope resources,
         CancellationToken cancellationToken);
 }

@@ -3,6 +3,11 @@ using TestFramework.Abstractions.Plugins;
 
 namespace TestFramework.Core.Plugins;
 
+/// <summary>
+/// Loads step plugins from individual assemblies. Scanning a whole plugin directory goes through
+/// <see cref="PluginDirectoryLoader"/> instead, which walks it once for every plugin kind; a
+/// step-only directory scan cannot tell a resource-only assembly from an empty one.
+/// </summary>
 public sealed class PluginLoader
 {
     private readonly IPluginRegistry _registry;
@@ -12,67 +17,17 @@ public sealed class PluginLoader
         _registry = registry;
     }
 
-    public IReadOnlyList<ITestStepPlugin> LoadFromDirectory(string directory)
-    {
-        return LoadFromDirectoryWithReport(directory).LoadedPlugins;
-    }
-
-    public PluginLoadReport LoadFromDirectoryWithReport(string directory)
-    {
-        if (!Directory.Exists(directory))
-        {
-            return new PluginLoadReport();
-        }
-
-        var report = new PluginLoadReport();
-
-        foreach (var file in Directory.EnumerateFiles(directory, "*.dll", SearchOption.AllDirectories))
-        {
-            IReadOnlyList<ITestStepPlugin> plugins;
-            try
-            {
-                plugins = LoadFromAssembly(file);
-            }
-            catch (Exception ex)
-            {
-                report.Failures.Add(new PluginLoadFailure
-                {
-                    AssemblyPath = file,
-                    Message = ex.Message,
-                    Exception = ex
-                });
-                continue;
-            }
-
-            foreach (var plugin in plugins)
-            {
-                try
-                {
-                    _registry.Register(plugin);
-                    report.LoadedPlugins.Add(plugin);
-                    report.PluginPaths[plugin] = file;
-                }
-                catch (Exception ex)
-                {
-                    report.Failures.Add(new PluginLoadFailure
-                    {
-                        AssemblyPath = file,
-                        Message = ex.Message,
-                        Exception = ex
-                    });
-                }
-            }
-        }
-
-        return report;
-    }
-
     public IReadOnlyList<ITestStepPlugin> LoadFromAssembly(string assemblyPath)
+    {
+        return LoadFromAssembly(assemblyPath, null);
+    }
+
+    private static IReadOnlyList<ITestStepPlugin> LoadFromAssembly(string assemblyPath, PluginLoadReport? report)
     {
         var handle = PluginAssemblyCatalog.Load(assemblyPath);
         try
         {
-            var plugins = CreatePlugins(handle.Assembly);
+            var plugins = CreatePlugins(handle.Assembly, report, assemblyPath);
             if (plugins.Count == 0)
             {
                 PluginAssemblyCatalog.ReleaseIfUnused(handle);
@@ -92,24 +47,64 @@ public sealed class PluginLoader
         return CreatePlugins(assembly);
     }
 
-    private static IReadOnlyList<ITestStepPlugin> CreatePlugins(Assembly assembly)
+    /// <summary>
+    /// Loads the plugins of an already-loaded assembly, isolating per-type failures into the
+    /// returned report instead of discarding the assembly's remaining plugins.
+    /// </summary>
+    public PluginLoadReport LoadFromAssemblyWithReport(Assembly assembly)
     {
-        var pluginType = typeof(ITestStepPlugin);
-        var plugins = new List<ITestStepPlugin>();
+        var report = new PluginLoadReport();
+        var assemblyPath = assembly.Location;
 
-        foreach (var type in assembly.GetTypes())
+        foreach (var plugin in CreatePlugins(assembly, report, assemblyPath))
         {
-            if (type.IsAbstract || type.IsInterface || !pluginType.IsAssignableFrom(type))
+            try
             {
-                continue;
+                _registry.Register(plugin);
+                report.LoadedPlugins.Add(plugin);
+                report.PluginPaths[plugin] = assemblyPath;
             }
-
-            if (Activator.CreateInstance(type) is ITestStepPlugin plugin)
+            catch (Exception ex)
             {
-                plugins.Add(plugin);
+                report.Failures.Add(new PluginLoadFailure
+                {
+                    AssemblyPath = assemblyPath,
+                    Message = ex.Message,
+                    Exception = ex
+                });
             }
         }
 
-        return plugins;
+        return report;
+    }
+
+    private static IReadOnlyList<ITestStepPlugin> CreatePlugins(Assembly assembly)
+    {
+        return CreatePlugins(assembly, null, null);
+    }
+
+    private static IReadOnlyList<ITestStepPlugin> CreatePlugins(
+        Assembly assembly,
+        PluginLoadReport? report,
+        string? assemblyPath)
+    {
+        var path = assemblyPath ?? assembly.Location;
+        var types = PluginAssemblyScan.GetLoadableTypes(assembly, out var typeLoadFailure);
+        if (typeLoadFailure is not null)
+        {
+            if (report is null)
+            {
+                throw typeLoadFailure;
+            }
+
+            report.Failures.Add(new PluginLoadFailure
+            {
+                AssemblyPath = path,
+                Message = typeLoadFailure.Message,
+                Exception = typeLoadFailure
+            });
+        }
+
+        return PluginActivator.CreateAll<ITestStepPlugin>(types, path, report?.Failures);
     }
 }

@@ -1,15 +1,20 @@
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
+using TestFramework.Abstractions.Resources;
 
 namespace TestFramework.SequenceYaml.Validation;
 
 public sealed class TestSequenceValidator
 {
     private readonly IPluginRegistry? _pluginRegistry;
+    private readonly IResourcePluginCatalog? _resourcePlugins;
 
-    public TestSequenceValidator(IPluginRegistry? pluginRegistry = null)
+    public TestSequenceValidator(
+        IPluginRegistry? pluginRegistry = null,
+        IResourcePluginCatalog? resourcePlugins = null)
     {
         _pluginRegistry = pluginRegistry;
+        _resourcePlugins = resourcePlugins;
     }
 
     public IReadOnlyList<ValidationIssue> Validate(TestSequence sequence)
@@ -74,6 +79,19 @@ public sealed class TestSequenceValidator
 
     private static void ValidateVerdictSource(VerdictSource source, string path, ICollection<ValidationIssue> issues)
     {
+        // YAML deserializes an out-of-range number straight into the enum, so a file can carry a
+        // judge type the runner has no branch for. Without this it reaches execution and falls
+        // through to a default that silently ignores the configured limits.
+        if (!Enum.IsDefined(source.JudgeType))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.judgeType", Message = $"Unknown verdict judge type '{(int)source.JudgeType}'." });
+        }
+
+        if (!Enum.IsDefined(source.StringMode))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.stringMode", Message = $"Unknown string judge mode '{(int)source.StringMode}'." });
+        }
+
         if (source.JudgeType is VerdictJudgeType.Numeric or VerdictJudgeType.String &&
             string.IsNullOrWhiteSpace(source.OutputKey))
         {
@@ -116,7 +134,7 @@ public sealed class TestSequenceValidator
         }
     }
 
-    private static void ValidateInstruments(
+    private void ValidateInstruments(
         IReadOnlyList<InstrumentDefinition> instruments,
         ICollection<ValidationIssue> issues)
     {
@@ -132,10 +150,14 @@ public sealed class TestSequenceValidator
             {
                 issues.Add(new ValidationIssue { Path = $"{path}.driverId", Message = "Instrument driver ID is required." });
             }
+            else
+            {
+                ValidateResourcePlugin(ResourcePluginKind.InstrumentDriver, instrument.DriverId, instrument.DriverVersion, $"{path}.driverId", issues);
+            }
         }
     }
 
-    private static void ValidateTransports(
+    private void ValidateTransports(
         IReadOnlyList<TransportDefinition> transports,
         IReadOnlyList<InstrumentDefinition> instruments,
         ICollection<ValidationIssue> issues)
@@ -154,6 +176,10 @@ public sealed class TestSequenceValidator
             {
                 issues.Add(new ValidationIssue { Path = $"{path}.transportId", Message = "Transport plugin ID is required." });
             }
+            else
+            {
+                ValidateResourcePlugin(ResourcePluginKind.Transport, transport.TransportId, transport.TransportVersion, $"{path}.transportId", issues);
+            }
 
             if (!string.IsNullOrWhiteSpace(transport.Channel) && !instrumentIds.Contains(transport.Channel))
             {
@@ -162,7 +188,7 @@ public sealed class TestSequenceValidator
         }
     }
 
-    private static void ValidateServices(
+    private void ValidateServices(
         IReadOnlyList<TestServiceDefinition> services,
         IReadOnlyList<TransportDefinition> transports,
         ICollection<ValidationIssue> issues)
@@ -181,11 +207,47 @@ public sealed class TestSequenceValidator
             {
                 issues.Add(new ValidationIssue { Path = $"{path}.serviceId", Message = "Service plugin ID is required." });
             }
+            else
+            {
+                ValidateResourcePlugin(ResourcePluginKind.Service, service.ServiceId, service.ServiceVersion, $"{path}.serviceId", issues);
+            }
 
             if (!string.IsNullOrWhiteSpace(service.Transport) && !transportIds.Contains(service.Transport))
             {
                 issues.Add(new ValidationIssue { Path = $"{path}.transport", Message = $"Transport '{service.Transport}' was not found." });
             }
+        }
+    }
+
+    /// <summary>
+    /// Reports a resource plugin reference that cannot be resolved as an error, and one satisfied by
+    /// a newer compatible version as a warning, so the operator learns about the substitution
+    /// without the sequence being refused.
+    /// </summary>
+    private void ValidateResourcePlugin(
+        ResourcePluginKind kind,
+        string pluginId,
+        string? version,
+        string path,
+        ICollection<ValidationIssue> issues)
+    {
+        if (_resourcePlugins is null)
+        {
+            return;
+        }
+
+        if (!_resourcePlugins.TryResolve(kind, pluginId, version, out var match, out var resolvedVersion))
+        {
+            issues.Add(new ValidationIssue { Path = path, Message = _resourcePlugins.DescribeMissing(kind, pluginId, version) });
+        }
+        else if (match == PluginVersionMatch.Compatible)
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = path,
+                Severity = ValidationSeverity.Warning,
+                Message = $"'{pluginId}' version '{version}' is not installed; version '{resolvedVersion}' will be used instead."
+            });
         }
     }
 
@@ -233,9 +295,21 @@ public sealed class TestSequenceValidator
             {
                 issues.Add(new ValidationIssue { Path = $"{stepPath}.pluginId", Message = "Test step plugin ID is required." });
             }
-            else if (_pluginRegistry is not null && !_pluginRegistry.TryGet(step.PluginId, step.PluginVersion, out _))
+            else if (_pluginRegistry is not null)
             {
-                issues.Add(new ValidationIssue { Path = $"{stepPath}.pluginId", Message = $"Test step plugin '{step.PluginId}' ({step.PluginVersion}) is not registered." });
+                if (!_pluginRegistry.TryResolve(step.PluginId, step.PluginVersion, out var resolution))
+                {
+                    issues.Add(new ValidationIssue { Path = $"{stepPath}.pluginId", Message = _pluginRegistry.DescribeMissing(step.PluginId, step.PluginVersion) });
+                }
+                else if (resolution.IsSubstituted)
+                {
+                    issues.Add(new ValidationIssue
+                    {
+                        Path = $"{stepPath}.pluginVersion",
+                        Severity = ValidationSeverity.Warning,
+                        Message = $"Test step plugin '{step.PluginId}' version '{step.PluginVersion}' is not installed; version '{resolution.ResolvedVersion}' will run instead."
+                    });
+                }
             }
 
             ValidateVariableWrites(step.VariableWrites, $"{stepPath}.variableWrites", issues);

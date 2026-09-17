@@ -1,5 +1,7 @@
 using TestFramework.Abstractions.Models;
 
+using TestFramework.Plugin.Abstractions.UI;
+
 namespace TestFramework.App.Services;
 
 public sealed class ParameterEntry
@@ -28,7 +30,7 @@ internal static class StepEditorListModels
             .Select(pair => new ParameterEntry
             {
                 Key = pair.Key,
-                ValueText = EditorValueConverter.Format(pair.Value)
+                ValueText = SettingsValueConverter.Format(pair.Value)
             })
             .ToList();
     }
@@ -42,7 +44,7 @@ internal static class StepEditorListModels
                 Definition = write,
                 Name = string.IsNullOrWhiteSpace(write.Name) ? "（未命名）" : write.Name,
                 SourceText = string.IsNullOrWhiteSpace(write.OutputKey)
-                    ? $"固定值：{EditorValueConverter.Format(write.Value)}"
+                    ? $"固定值：{SettingsValueConverter.Format(write.Value)}"
                     : $"输出：{write.OutputKey}"
             })
             .ToList();

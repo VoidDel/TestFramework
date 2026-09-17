@@ -130,7 +130,10 @@ internal static partial class UnitConverter
     {
         return unit?.Trim()
             .Replace("Ω", "Ohm", StringComparison.Ordinal)
-            .Replace("μ", "u", StringComparison.Ordinal) ?? string.Empty;
+            .Replace("μ", "u", StringComparison.Ordinal)
+            // U+00B5 MICRO SIGN is what keyboards and most editors produce for "uV"/"uA"/"us";
+            // it is a different code point from U+03BC GREEK SMALL LETTER MU above.
+            .Replace("µ", "u", StringComparison.Ordinal) ?? string.Empty;
     }
 
     [GeneratedRegex(@"^(?<number>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(?<unit>.*)$")]

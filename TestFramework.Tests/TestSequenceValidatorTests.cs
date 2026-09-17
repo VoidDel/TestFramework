@@ -1,6 +1,7 @@
 using TestFramework.Abstractions.Execution;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
+using TestFramework.Abstractions.Resources;
 using TestFramework.Core.Plugins;
 using TestFramework.SequenceYaml.Validation;
 using Xunit;
@@ -250,6 +251,169 @@ public sealed class TestSequenceValidatorTests
         var issues = new TestSequenceValidator().Validate(sequence);
 
         Assert.Contains(issues, issue => issue.Path == "transports[0].channel");
+    }
+
+    [Fact]
+    public void Validate_UnregisteredResourcePlugins_AreReportedBeforeTheRun()
+    {
+        var sequence = ValidSequence();
+        sequence.Instruments.Add(new InstrumentDefinition { Id = "dmm", DriverId = "missing.driver", DriverVersion = "1.0.0" });
+        sequence.Transports.Add(new TransportDefinition { Id = "bus", TransportId = "missing.transport", TransportVersion = "1.0.0" });
+        sequence.Services.Add(new TestServiceDefinition { Id = "svc", ServiceId = "missing.service", ServiceVersion = "1.0.0" });
+
+        var issues = new TestSequenceValidator(null, new EmptyResourceCatalog()).Validate(sequence);
+
+        Assert.Contains(issues, issue => issue.Path == "instruments[0].driverId");
+        Assert.Contains(issues, issue => issue.Path == "transports[0].transportId");
+        Assert.Contains(issues, issue => issue.Path == "services[0].serviceId");
+    }
+
+    [Fact]
+    public void Validate_WithoutAResourceCatalog_DoesNotReportResourcePlugins()
+    {
+        var sequence = ValidSequence();
+        sequence.Instruments.Add(new InstrumentDefinition { Id = "dmm", DriverId = "missing.driver", DriverVersion = "1.0.0" });
+
+        Assert.Empty(new TestSequenceValidator().Validate(sequence));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_NonPositiveTimeout_IsReported(int timeoutMs)
+    {
+        var sequence = ValidSequence();
+        sequence.Items[0].MainSteps[0].TimeoutMs = timeoutMs;
+
+        Assert.Contains(new TestSequenceValidator().Validate(sequence), issue => issue.Path == "items[0].main[0].timeoutMs");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-a-version")]
+    public void Validate_InvalidPluginVersion_IsReported(string version)
+    {
+        var sequence = ValidSequence();
+        sequence.Items[0].MainSteps[0].PluginVersion = version;
+
+        Assert.Contains(new TestSequenceValidator().Validate(sequence), issue => issue.Path == "items[0].main[0].pluginVersion");
+    }
+
+    [Fact]
+    public void Validate_VariableWriteWithoutOutputKeyOrValue_IsReported()
+    {
+        var sequence = ValidSequence();
+        sequence.Items[0].MainSteps[0].VariableWrites.Add(new VariableWriteDefinition { Name = "result" });
+
+        Assert.Contains(new TestSequenceValidator().Validate(sequence), issue => issue.Path == "items[0].main[0].variableWrites[0]");
+    }
+
+    [Fact]
+    public void Validate_VerdictSourceOutsideMainSteps_IsReported()
+    {
+        var sequence = ValidSequence();
+        sequence.Items[0].VerdictSource.StepId = "not-a-main-step";
+
+        Assert.Contains(new TestSequenceValidator().Validate(sequence), issue => issue.Path == "items[0].verdictSource.stepId");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public void Validate_UnsupportedSchemaVersion_IsReported(int version)
+    {
+        var sequence = ValidSequence();
+        sequence.SchemaVersion = version;
+
+        Assert.Contains(new TestSequenceValidator().Validate(sequence), issue => issue.Path == "schemaVersion");
+    }
+
+    [Fact]
+    public void Validate_UndefinedEnumValuesFromYaml_AreReported()
+    {
+        var sequence = ValidSequence();
+        sequence.Items[0].VerdictSource.JudgeType = (VerdictJudgeType)99;
+        sequence.Items[0].VerdictSource.StringMode = (StringJudgeMode)42;
+
+        var issues = new TestSequenceValidator().Validate(sequence);
+
+        Assert.Contains(issues, issue => issue.Path == "items[0].verdictSource.judgeType");
+        Assert.Contains(issues, issue => issue.Path == "items[0].verdictSource.stringMode");
+    }
+
+    [Fact]
+    public void Validate_SubstitutedPluginVersion_WarnsWithoutBlockingTheRun()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new StubPlugin("demo.step", new Version(1, 2, 0)));
+        var sequence = ValidSequence();
+        sequence.Items[0].MainSteps[0].PluginVersion = "1.0.0";
+
+        var issues = new TestSequenceValidator(registry).Validate(sequence);
+
+        var warning = Assert.Single(issues);
+        Assert.Equal(ValidationSeverity.Warning, warning.Severity);
+        Assert.False(warning.IsError);
+        Assert.Contains("1.2.0", warning.Message);
+    }
+
+    [Fact]
+    public void Validate_IncompatiblePluginVersion_IsAnErrorNamingTheInstalledVersions()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new StubPlugin("demo.step", new Version(2, 0, 0)));
+        var sequence = ValidSequence();
+        sequence.Items[0].MainSteps[0].PluginVersion = "1.0.0";
+
+        var issue = Assert.Single(new TestSequenceValidator(registry).Validate(sequence));
+
+        Assert.True(issue.IsError);
+        Assert.Contains("2.0.0", issue.Message);
+    }
+
+    private static TestSequence ValidSequence()
+    {
+        return new TestSequence
+        {
+            Name = "Sequence",
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Id = "item",
+                    Name = "Item",
+                    MainSteps =
+                    [
+                        new TestStepDefinition
+                        {
+                            Id = "main",
+                            Name = "Main",
+                            PluginId = "demo.step",
+                            PluginVersion = "1.0.0"
+                        }
+                    ],
+                    VerdictSource = new VerdictSource { StepId = "main" }
+                }
+            ]
+        };
+    }
+
+    private sealed class EmptyResourceCatalog : IResourcePluginCatalog
+    {
+        public bool TryResolve(
+            ResourcePluginKind kind,
+            string pluginId,
+            string? version,
+            out PluginVersionMatch match,
+            out Version resolvedVersion)
+        {
+            match = default;
+            resolvedVersion = new Version(0, 0);
+            return false;
+        }
+
+        public string DescribeMissing(ResourcePluginKind kind, string pluginId, string? version) =>
+            $"{kind} '{pluginId}' is not registered.";
     }
 
     private sealed class StubPlugin : ITestStepPlugin

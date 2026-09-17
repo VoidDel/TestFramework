@@ -10,14 +10,17 @@ using TestFramework.Abstractions.Models;
 using TestFramework.App.Services;
 using TestFramework.App.Views;
 using TestFramework.Core.Plugins;
-using TestFramework.Plugins.BasicSteps;
 using Xunit;
 
 namespace TestFramework.App.Tests;
 
-[Collection("Avalonia UI")]
+[Collection(AvaloniaUiCollection.Name)]
 public sealed class EditorSafetyTests
 {
+    private readonly HeadlessUnitTestSession _session;
+
+    public EditorSafetyTests(AvaloniaTestSession session) => _session = session.Session;
+
     [Fact]
     public async Task StopButton_MouseClickCancelsAndPersistsPartialResult()
     {
@@ -116,11 +119,11 @@ public sealed class EditorSafetyTests
     {
         await WithView((view, window, directory) =>
         {
-            var plugin = new LimitCheckStepPlugin();
-            var plugins = new PluginRegistry();
-            plugins.Register(plugin);
-            var editors = new PluginSettingsEditorRegistry();
-            BasicStepSettingsEditors.Register(editors);
+            // Taken from the view, which discovered them in the staged plugin directory: the test
+            // then covers the real load path rather than a hand-built registry.
+            var plugins = Field<PluginRegistry>(view, "_pluginRegistry");
+            var editors = Field<PluginSettingsEditorRegistry>(view, "_settingsEditorRegistry");
+            Assert.True(plugins.TryGet("basic.limit-check", out _), "basic.limit-check plugin was not loaded from the plugin directory.");
             var step = new TestStepDefinition { PluginId = "basic.limit-check", Parameters = { ["Value"] = "${measurement}" } };
             var editor = new StepEditorWindow(step, plugins, editors, new Dictionary<string, object?>());
             editor.Show();
@@ -154,10 +157,10 @@ public sealed class EditorSafetyTests
         });
     }
 
-    private static async Task WithView(Func<SequenceEditorView, Window, string, Task> test)
+    private async Task WithView(Func<SequenceEditorView, Window, string, Task> test)
     {
         var directory = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SequenceEditorViewTests.SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(async () =>
@@ -186,6 +189,38 @@ public sealed class EditorSafetyTests
         {
             if (Directory.Exists(directory)) Directory.Delete(directory, true);
         }
+    }
+
+    [Fact]
+    public async Task DeleteSequence_WithoutConfirmation_KeepsTheFileOnDisk()
+    {
+        await WithView(async (view, window, directory) =>
+        {
+            var document = Field<SequenceDocument>(view, "_currentDocument");
+            await (Task<string>)Invoke(view, "SaveDocumentAsync", document)!;
+            var filePath = document.FilePath!;
+            Assert.True(File.Exists(filePath));
+
+            var prompted = 0;
+            view.DeleteSequencePrompt = _ =>
+            {
+                prompted++;
+                return Task.FromResult(false);
+            };
+            Invoke(view, "DeleteSequence_OnClick", null, null);
+            await WaitUntil(() => prompted > 0);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(File.Exists(filePath));
+            Assert.Contains(Field<System.Collections.Generic.List<SequenceDocument>>(view, "_sequenceDocuments"), candidate => candidate == document);
+
+            view.DeleteSequencePrompt = _ => Task.FromResult(true);
+            Invoke(view, "DeleteSequence_OnClick", null, null);
+            await WaitUntil(() => !File.Exists(filePath));
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.False(File.Exists(filePath));
+        });
     }
 
     private static async Task WaitUntil(Func<bool> predicate)

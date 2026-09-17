@@ -10,16 +10,20 @@ using Xunit;
 
 namespace TestFramework.App.Tests;
 
-[Collection("Avalonia UI")]
+[Collection(AvaloniaUiCollection.Name)]
 public sealed class SequenceEditorViewTests
 {
+    private readonly HeadlessUnitTestSession _session;
+
+    public SequenceEditorViewTests(AvaloniaTestSession session) => _session = session.Session;
+
     [Fact]
     public async Task RefreshingVerdictControls_PreservesTheConfiguredStep_AndInvalidNumbersBlockValidation()
     {
         var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
         var sequenceDirectory = Path.Combine(root, "sequences");
         var resultDirectory = Path.Combine(root, "results");
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(() =>
@@ -53,10 +57,10 @@ public sealed class SequenceEditorViewTests
     }
 
     [Fact]
-    public async Task PluginPicker_GroupsBuiltInStepsUnderBuiltInCategory()
+    public async Task PluginPicker_GroupsPluginsByTheFolderTheyWereDeployedIn()
     {
         var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(() =>
@@ -68,9 +72,11 @@ public sealed class SequenceEditorViewTests
                 var pluginTree = picker.FindControl<TreeView>("PluginTree")!;
                 var categories = Assert.IsAssignableFrom<IEnumerable<SequenceEditorView.PluginTreeNode>>(pluginTree.ItemsSource).ToList();
 
-                var builtIn = Assert.Single(categories, category => category.Title == "内置");
-                Assert.Equal(4, builtIn.Children.Count);
-                Assert.All(builtIn.Children, plugin => Assert.NotNull(plugin.Plugin));
+                // The built-in steps are deployed to Plugins/BasicSteps and are grouped by that
+                // folder, exactly like any third-party package: nothing about them is special-cased.
+                var basicSteps = Assert.Single(categories, category => category.Title == "BasicSteps");
+                Assert.Equal(4, basicSteps.Children.Count);
+                Assert.All(basicSteps.Children, plugin => Assert.NotNull(plugin.Plugin));
             }, CancellationToken.None);
         }
         finally
@@ -86,7 +92,7 @@ public sealed class SequenceEditorViewTests
     public async Task PointerPressOnTreeViewItem_CapturesDragSourceBeforeSelectionHandlesEvent()
     {
         var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(() =>
@@ -140,7 +146,7 @@ public sealed class SequenceEditorViewTests
     public async Task StepEditorWindow_OpensWithoutThrowing_MissingIconResourceRegression()
     {
         // 回归测试：StepEditorWindow 曾引用未定义的 IconSettings 资源，打开即抛异常。
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
+        var session = _session;
         await session.Dispatch(() =>
         {
             var step = new TestStepDefinition
@@ -166,7 +172,7 @@ public sealed class SequenceEditorViewTests
     public async Task DisabledTreeNode_RendersWithReducedOpacity()
     {
         var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(() =>
@@ -209,7 +215,7 @@ public sealed class SequenceEditorViewTests
     public async Task FreshView_IsNotMarkedDirty()
     {
         var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(() =>
@@ -235,23 +241,13 @@ public sealed class SequenceEditorViewTests
         }
     }
 
-    /// <summary>
-    /// 为视觉帧捕获提供带真实渲染管线的 AppBuilder（UseHeadlessDrawing=false 才会真正渲染）。
-    /// </summary>
-    public static class SkiaRenderTestApp
-    {
-        public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>()
-            .UseSkia()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
-    }
-
     [Fact]
     public async Task Views_RenderWithoutThrowing_InLightAndDarkThemes()
     {
         // 渲染冒烟测试：真实 Skia 管线下，主视图与 Step 编辑器在明/暗主题中均应正常出帧。
         // 同时覆盖 IconSettings 缺失导致 Step 编辑器崩溃的回归。
         var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(() =>

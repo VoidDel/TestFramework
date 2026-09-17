@@ -4,6 +4,11 @@ using TestFramework.Core.Plugins;
 
 namespace TestFramework.Core.Resources;
 
+/// <summary>
+/// Loads resource plugins from individual assemblies. Directory scanning lives in
+/// <see cref="TestFramework.Core.Plugins.PluginDirectoryLoader"/>, which covers both plugin kinds
+/// in one pass.
+/// </summary>
 public sealed class ResourcePluginLoader
 {
     private readonly ResourcePluginRegistry _registry;
@@ -11,39 +16,6 @@ public sealed class ResourcePluginLoader
     public ResourcePluginLoader(ResourcePluginRegistry registry)
     {
         _registry = registry;
-    }
-
-    public ResourcePluginLoadReport LoadFromDirectory(string directory)
-    {
-        var report = new ResourcePluginLoadReport();
-        if (!Directory.Exists(directory))
-        {
-            return report;
-        }
-
-        foreach (var file in Directory.EnumerateFiles(directory, "*.dll", SearchOption.AllDirectories))
-        {
-            PluginAssemblyHandle? handle = null;
-            var pluginCountBefore = CountPlugins(report);
-            try
-            {
-                handle = PluginAssemblyCatalog.Load(file);
-                LoadFromAssembly(handle.Value.Assembly, file, report);
-            }
-            catch (Exception ex)
-            {
-                AddFailure(report, file, ex);
-            }
-            finally
-            {
-                if (handle.HasValue && CountPlugins(report) == pluginCountBefore)
-                {
-                    PluginAssemblyCatalog.ReleaseIfUnused(handle.Value);
-                }
-            }
-        }
-
-        return report;
     }
 
     public ResourcePluginLoadReport LoadFromAssembly(Assembly assembly)
@@ -64,62 +36,43 @@ public sealed class ResourcePluginLoader
 
     private void LoadFromAssembly(Assembly assembly, string assemblyPath, ResourcePluginLoadReport report)
     {
-        foreach (var type in assembly.GetTypes())
+        var types = PluginAssemblyScan.GetLoadableTypes(assembly, out var typeLoadFailure);
+        if (typeLoadFailure is not null)
         {
-            if (type.IsAbstract || type.IsInterface)
-            {
-                continue;
-            }
+            AddFailure(report, assemblyPath, typeLoadFailure);
+        }
 
-            CreateAndRegister<IInstrumentDriverPlugin>(
-                type,
-                assemblyPath,
-                report,
-                plugin =>
-                {
-                    _registry.RegisterInstrumentDriver(plugin);
-                    report.InstrumentDrivers.Add(plugin);
-                });
+        RegisterAll(types, assemblyPath, report);
+    }
 
-            CreateAndRegister<ITransportPlugin>(
-                type,
-                assemblyPath,
-                report,
-                plugin =>
-                {
-                    _registry.RegisterTransport(plugin);
-                    report.Transports.Add(plugin);
-                });
+    /// <summary>
+    /// Instantiates and registers every resource plugin among <paramref name="types"/>. A single
+    /// type may implement more than one resource contract, so each kind is scanned independently.
+    /// </summary>
+    internal void RegisterAll(IReadOnlyList<Type> types, string assemblyPath, ResourcePluginLoadReport report)
+    {
+        foreach (var plugin in PluginActivator.CreateAll<IInstrumentDriverPlugin>(types, assemblyPath, report.Failures))
+        {
+            Register(() => _registry.RegisterInstrumentDriver(plugin), () => report.InstrumentDrivers.Add(plugin), assemblyPath, report);
+        }
 
-            CreateAndRegister<ITestServicePlugin>(
-                type,
-                assemblyPath,
-                report,
-                plugin =>
-                {
-                    _registry.RegisterService(plugin);
-                    report.Services.Add(plugin);
-                });
+        foreach (var plugin in PluginActivator.CreateAll<ITransportPlugin>(types, assemblyPath, report.Failures))
+        {
+            Register(() => _registry.RegisterTransport(plugin), () => report.Transports.Add(plugin), assemblyPath, report);
+        }
+
+        foreach (var plugin in PluginActivator.CreateAll<ITestServicePlugin>(types, assemblyPath, report.Failures))
+        {
+            Register(() => _registry.RegisterService(plugin), () => report.Services.Add(plugin), assemblyPath, report);
         }
     }
 
-    private static void CreateAndRegister<TPlugin>(
-        Type type,
-        string assemblyPath,
-        ResourcePluginLoadReport report,
-        Action<TPlugin> register)
+    private static void Register(Action register, Action record, string assemblyPath, ResourcePluginLoadReport report)
     {
-        if (!typeof(TPlugin).IsAssignableFrom(type))
-        {
-            return;
-        }
-
         try
         {
-            if (Activator.CreateInstance(type) is TPlugin plugin)
-            {
-                register(plugin);
-            }
+            register();
+            record();
         }
         catch (Exception ex)
         {
@@ -135,10 +88,5 @@ public sealed class ResourcePluginLoader
             Message = ex.Message,
             Exception = ex
         });
-    }
-
-    private static int CountPlugins(ResourcePluginLoadReport report)
-    {
-        return report.InstrumentDrivers.Count + report.Transports.Count + report.Services.Count;
     }
 }

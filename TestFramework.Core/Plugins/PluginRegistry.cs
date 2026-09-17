@@ -4,70 +4,37 @@ namespace TestFramework.Core.Plugins;
 
 public sealed class PluginRegistry : IPluginRegistry
 {
-    private readonly Dictionary<string, List<ITestStepPlugin>> _plugins = new(StringComparer.OrdinalIgnoreCase);
+    private readonly VersionedPluginIndex<ITestStepPlugin> _index = new(
+        "Test step plugin",
+        plugin => plugin.Descriptor.PluginId,
+        plugin => plugin.Descriptor.Version);
 
-    public IReadOnlyCollection<ITestStepPlugin> Plugins => _plugins.Values
-        .SelectMany(plugins => plugins)
+    public IReadOnlyCollection<ITestStepPlugin> Plugins => _index.Plugins
         .OrderBy(plugin => plugin.Descriptor.Category)
         .ThenBy(plugin => plugin.Descriptor.DisplayName)
         .ThenByDescending(plugin => plugin.Descriptor.Version)
         .ToArray();
 
-    public void Register(ITestStepPlugin plugin)
-    {
-        ArgumentNullException.ThrowIfNull(plugin);
-        var pluginId = plugin.Descriptor.PluginId;
-        if (!_plugins.TryGetValue(pluginId, out var versions))
-        {
-            versions = [];
-            _plugins[pluginId] = versions;
-        }
+    public void Register(ITestStepPlugin plugin) => _index.Register(plugin);
 
-        if (versions.Any(existing => existing.Descriptor.Version == plugin.Descriptor.Version))
-        {
-            throw new InvalidOperationException(
-                $"Test step plugin '{pluginId}' version '{plugin.Descriptor.Version}' is already registered.");
-        }
+    public ITestStepPlugin GetRequired(string pluginId, string? version = null) => _index.GetRequired(pluginId, version);
 
-        versions.Add(plugin);
-    }
-
-    public ITestStepPlugin GetRequired(string pluginId, string? version = null)
-    {
-        if (TryGet(pluginId, version, out var plugin))
-        {
-            return plugin;
-        }
-
-        var versionText = string.IsNullOrWhiteSpace(version) ? string.Empty : $" version '{version}'";
-        throw new InvalidOperationException($"Test step plugin '{pluginId}'{versionText} is not registered.");
-    }
-
-    public bool TryGet(string pluginId, out ITestStepPlugin plugin)
-    {
-        return TryGet(pluginId, null, out plugin);
-    }
+    public bool TryGet(string pluginId, out ITestStepPlugin plugin) => TryGet(pluginId, null, out plugin);
 
     public bool TryGet(string pluginId, string? version, out ITestStepPlugin plugin)
     {
-        plugin = null!;
-        if (!_plugins.TryGetValue(pluginId, out var versions) || versions.Count == 0)
+        if (TryResolve(pluginId, version, out var resolution))
         {
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(version))
-        {
-            plugin = versions.OrderByDescending(candidate => candidate.Descriptor.Version).First();
+            plugin = resolution.Plugin;
             return true;
         }
 
-        if (!Version.TryParse(version, out var parsedVersion))
-        {
-            return false;
-        }
-
-        plugin = versions.FirstOrDefault(candidate => candidate.Descriptor.Version == parsedVersion)!;
-        return plugin is not null;
+        plugin = null!;
+        return false;
     }
+
+    public bool TryResolve(string pluginId, string? version, out PluginResolution<ITestStepPlugin> resolution) =>
+        _index.TryResolve(pluginId, version, out resolution);
+
+    public string DescribeMissing(string pluginId, string? version) => _index.DescribeMissing(pluginId, version);
 }

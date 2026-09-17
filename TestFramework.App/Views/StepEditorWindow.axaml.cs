@@ -4,6 +4,8 @@ using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.App.Services;
 
+using TestFramework.Plugin.Abstractions.UI;
+
 namespace TestFramework.App.Views;
 
 public sealed partial class StepEditorWindow : Window
@@ -112,7 +114,7 @@ public sealed partial class StepEditorWindow : Window
             var previewParameters = new Dictionary<string, object?>(plugin.SaveSettings(plugin.CreateDefaultSettings()), StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in _step.Parameters)
             {
-                if (!EditorValueConverter.IsVariableReference(value)) previewParameters[key] = value;
+                if (!SettingsValueConverter.IsVariableReference(value)) previewParameters[key] = value;
             }
             _settings = plugin.LoadSettings(previewParameters);
             _settingsBaselineParameters = plugin.SaveSettings(_settings);
@@ -124,23 +126,37 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        if (_settingsEditorRegistry is not null &&
-            _settingsEditorRegistry.TryCreateEditor(
-                _step.PluginId,
-                _step.PluginVersion,
-                _settings,
-                new SettingsEditContext(
-                    SaveSelectedPluginSettings,
-                    _variables,
-                    GetStepParameterValue,
-                    SetStepParameterValue),
-                out var editor))
+        // The editor factory is plugin-supplied code. An exception here would otherwise escape a
+        // constructor or a synchronous handler and terminate the process, so the step falls back to
+        // the raw parameter list instead.
+        try
         {
-            PluginSettingsContent.Content = editor;
+            if (_settingsEditorRegistry is not null &&
+                _settingsEditorRegistry.TryCreateEditor(
+                    _step.PluginId,
+                    _step.PluginVersion,
+                    _settings,
+                    new SettingsEditContext(
+                        SaveSelectedPluginSettings,
+                        _variables,
+                        GetStepParameterValue,
+                        SetStepParameterValue),
+                    out var editor))
+            {
+                PluginSettingsContent.Content = editor;
+            }
+            else
+            {
+                PluginSettingsContent.Content = new TextBlock { Text = "该插件未提供配置界面。" };
+            }
         }
-        else
+        catch (Exception ex)
         {
-            PluginSettingsContent.Content = new TextBlock { Text = "该插件未提供配置界面。" };
+            PluginSettingsContent.Content = new TextBlock
+            {
+                Text = $"插件配置界面加载失败，请使用参数列表编辑：{ex.Message}",
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            };
         }
     }
 
@@ -225,7 +241,7 @@ public sealed partial class StepEditorWindow : Window
         _selectedVariableWrite = selected?.Definition;
         VariableWriteNameBox.Text = _selectedVariableWrite?.Name ?? string.Empty;
         VariableWriteOutputKeyBox.Text = _selectedVariableWrite?.OutputKey ?? string.Empty;
-        VariableWriteValueBox.Text = EditorValueConverter.Format(_selectedVariableWrite?.Value);
+        VariableWriteValueBox.Text = SettingsValueConverter.Format(_selectedVariableWrite?.Value);
         VariableWriteOnErrorBox.IsChecked = _selectedVariableWrite?.WriteOnError ?? false;
 
         _updating = wasUpdating;
@@ -310,7 +326,7 @@ public sealed partial class StepEditorWindow : Window
         ParameterValueBox.Text = _step is not null &&
                                  _selectedParameterKey is not null &&
                                  _step.Parameters.TryGetValue(_selectedParameterKey, out var value)
-            ? EditorValueConverter.Format(value)
+            ? SettingsValueConverter.Format(value)
             : string.Empty;
         _updating = wasUpdating;
     }
@@ -349,7 +365,7 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        _step.Parameters[_selectedParameterKey] = EditorValueConverter.Parse(ParameterValueBox.Text);
+        _step.Parameters[_selectedParameterKey] = SettingsValueConverter.Parse(ParameterValueBox.Text);
     }
 
     private void AddParameter_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -389,7 +405,7 @@ public sealed partial class StepEditorWindow : Window
         _updating = true;
         VariableWriteNameBox.Text = _selectedVariableWrite?.Name ?? string.Empty;
         VariableWriteOutputKeyBox.Text = _selectedVariableWrite?.OutputKey ?? string.Empty;
-        VariableWriteValueBox.Text = EditorValueConverter.Format(_selectedVariableWrite?.Value);
+        VariableWriteValueBox.Text = SettingsValueConverter.Format(_selectedVariableWrite?.Value);
         VariableWriteOnErrorBox.IsChecked = _selectedVariableWrite?.WriteOnError ?? false;
         _updating = wasUpdating;
     }
@@ -424,7 +440,7 @@ public sealed partial class StepEditorWindow : Window
         }
 
         _selectedVariableWrite.Value = string.IsNullOrWhiteSpace(_selectedVariableWrite.OutputKey)
-            ? EditorValueConverter.Parse(VariableWriteValueBox.Text)
+            ? SettingsValueConverter.Parse(VariableWriteValueBox.Text)
             : null;
     }
 

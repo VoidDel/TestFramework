@@ -18,11 +18,11 @@ public sealed class TestStepExecutionContext
 
     public required IReadOnlyDictionary<string, TestStepResult> PreviousStepResults { get; init; }
 
-    public IInstrumentProvider Instruments { get; init; } = RuntimeResourceProvider.Empty;
+    public IInstrumentProvider Instruments { get; init; } = EmptyResourceScope.Instance;
 
-    public ITransportProvider Transports { get; init; } = RuntimeResourceProvider.Empty;
+    public ITransportProvider Transports { get; init; } = EmptyResourceScope.Instance;
 
-    public ITestServiceProvider Services { get; init; } = RuntimeResourceProvider.Empty;
+    public ITestServiceProvider Services { get; init; } = EmptyResourceScope.Instance;
 
     public Action<string>? Log { get; init; }
 }

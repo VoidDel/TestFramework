@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- A plugin is delivered as a DLL dropped into the host's plugin folder, not consumed as a
+         package reference, so it is not packed. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TestFramework.Plugin.Abstractions.UI\TestFramework.Plugin.Abstractions.UI.csproj" />
+    <ProjectReference Include="..\TestFramework.Plugins.BasicSteps\TestFramework.Plugins.BasicSteps.csproj" />
+  </ItemGroup>
+</Project>

@@ -14,9 +14,13 @@ using Xunit;
 
 namespace TestFramework.App.Tests;
 
-[Collection("Avalonia UI")]
+[Collection(AvaloniaUiCollection.Name)]
 public sealed class EditorSafetyTests
 {
+    private readonly HeadlessUnitTestSession _session;
+
+    public EditorSafetyTests(AvaloniaTestSession session) => _session = session.Session;
+
     [Fact]
     public async Task StopButton_MouseClickCancelsAndPersistsPartialResult()
     {
@@ -153,10 +157,10 @@ public sealed class EditorSafetyTests
         });
     }
 
-    private static async Task WithView(Func<SequenceEditorView, Window, string, Task> test)
+    private async Task WithView(Func<SequenceEditorView, Window, string, Task> test)
     {
         var directory = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
-        using var session = HeadlessUnitTestSession.StartNew(typeof(SequenceEditorViewTests.SkiaRenderTestApp));
+        var session = _session;
         try
         {
             await session.Dispatch(async () =>

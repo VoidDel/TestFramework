@@ -1,8 +1,15 @@
 using System.Globalization;
 
-namespace TestFramework.App.Services;
+namespace TestFramework.Plugin.Abstractions.UI;
 
-internal static class EditorValueConverter
+/// <summary>
+/// Converts between parameter values and the text an editor shows.
+///
+/// It lives in the editor SDK rather than the host because a plugin's editor has to read and write
+/// parameters exactly the way the framework does - same number formats, same handling of
+/// <c>${variable}</c> references - or a value round-trips through the editor and comes back changed.
+/// </summary>
+public static class SettingsValueConverter
 {
     public static object? Parse(string? text)
     {

@@ -13,7 +13,6 @@ using TestFramework.App.Services;
 using TestFramework.Core.Plugins;
 using TestFramework.Core.Resources;
 using TestFramework.Plugin.Abstractions.UI;
-using TestFramework.Plugins.BasicSteps;
 using TestFramework.SequenceYaml;
 using TestFramework.SequenceYaml.Validation;
 
@@ -157,7 +156,6 @@ public sealed partial class SequenceEditorView : UserControl
             handledEventsToo: true);
 
         RegisterPlugins();
-        RegisterSettingsEditors();
         _documentStore = new SequenceDocumentStore(_yamlService, sequenceDirectory, CreateDefaultSequence);
         _runService = new SequenceRunService(_pluginRegistry, _resourcePluginRegistry);
         _resultStore = new TestResultStore(resultDirectory);
@@ -220,32 +218,34 @@ public sealed partial class SequenceEditorView : UserControl
         }
     }
 
+    /// <summary>
+    /// Loads every plugin from the plugin directory. Nothing is compiled in: the built-in steps are
+    /// copied into that directory at build time and travel the same path a third-party plugin does,
+    /// which is the only way the loading path stays honest.
+    /// </summary>
     private void RegisterPlugins()
     {
-        RegisterBuiltInPlugin(new DelayStepPlugin());
-        RegisterBuiltInPlugin(new LogStepPlugin());
-        RegisterBuiltInPlugin(new LimitCheckStepPlugin());
-        RegisterBuiltInPlugin(new ThrowStepPlugin());
-
         var pluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins");
-        var report = new PluginDirectoryLoader(_pluginRegistry, _resourcePluginRegistry).LoadFromDirectory(pluginDirectory);
+        var report = new PluginDirectoryLoader(
+                _pluginRegistry,
+                _resourcePluginRegistry,
+                [new SettingsEditorPluginHandler(_settingsEditorRegistry)])
+            .LoadFromDirectory(pluginDirectory);
 
         foreach (var plugin in report.StepPlugins)
         {
             _pluginCategories[plugin] = GetPluginCategory(pluginDirectory, report.PluginPaths[plugin]);
         }
 
-        RegisterSettingsEditors(report.StepPlugins);
         foreach (var failure in report.Failures)
         {
             AppendLog($"插件加载失败：{failure.AssemblyPath} - {failure.Message}");
         }
-    }
 
-    private void RegisterBuiltInPlugin(ITestStepPlugin plugin)
-    {
-        _pluginRegistry.Register(plugin);
-        _pluginCategories[plugin] = "内置";
+        if (report.LoadedCount == 0)
+        {
+            AppendLog($"未在 {pluginDirectory} 找到任何插件，新建序列将为空序列。");
+        }
     }
 
     private static string GetPluginCategory(string pluginDirectory, string assemblyPath)
@@ -319,30 +319,20 @@ public sealed partial class SequenceEditorView : UserControl
         }
     }
 
-    private void RegisterSettingsEditors()
-    {
-        BasicStepSettingsEditors.Register(_settingsEditorRegistry);
-    }
-
-    private void RegisterSettingsEditors(IEnumerable<ITestStepPlugin> plugins)
-    {
-        foreach (var plugin in plugins)
-        {
-            if (plugin is ITestStepSettingsEditorProvider editorProvider)
-            {
-                _settingsEditorRegistry.Register(
-                    plugin.Descriptor.PluginId,
-                    plugin.Descriptor.Version,
-                    editorProvider.CreateEditor);
-            }
-        }
-    }
-
+    /// <summary>
+    /// Builds the sample sequence shown for a new document. The steps it uses come from the
+    /// built-in plugin package, which is loaded from the plugin directory like any other; when that
+    /// directory is empty the editor still has to open, so the sample degrades to an empty sequence
+    /// rather than failing to start.
+    /// </summary>
     private TestSequence CreateDefaultSequence()
     {
-        var logPlugin = _pluginRegistry.GetRequired("basic.log");
-        var delayPlugin = _pluginRegistry.GetRequired("basic.delay");
-        var checkPlugin = _pluginRegistry.GetRequired("basic.limit-check");
+        if (!_pluginRegistry.TryGet("basic.log", out var logPlugin) ||
+            !_pluginRegistry.TryGet("basic.delay", out var delayPlugin) ||
+            !_pluginRegistry.TryGet("basic.limit-check", out var checkPlugin))
+        {
+            return new TestSequence { Name = "新建测试序列" };
+        }
 
         var init = CreateStep(logPlugin, "初始化工装");
         var mainDelay = CreateStep(delayPlugin, "等待稳定");
@@ -545,8 +535,8 @@ public sealed partial class SequenceEditorView : UserControl
             string.Equals(step.Id, _selectedItem.VerdictSource.StepId, StringComparison.OrdinalIgnoreCase));
         VerdictOutputBox.Text = _selectedItem.VerdictSource.OutputKey ?? string.Empty;
         SelectOption(VerdictTypeCombo, _selectedItem.VerdictSource.JudgeType);
-        NumericLowerBox.Text = EditorValueConverter.FormatNullableDouble(_selectedItem.VerdictSource.LowerLimit);
-        NumericUpperBox.Text = EditorValueConverter.FormatNullableDouble(_selectedItem.VerdictSource.UpperLimit);
+        NumericLowerBox.Text = SettingsValueConverter.FormatNullableDouble(_selectedItem.VerdictSource.LowerLimit);
+        NumericUpperBox.Text = SettingsValueConverter.FormatNullableDouble(_selectedItem.VerdictSource.UpperLimit);
         NumericSourceUnitBox.Text = _selectedItem.VerdictSource.SourceUnit ?? string.Empty;
         NumericUnitBox.Text = _selectedItem.VerdictSource.Unit ?? string.Empty;
         SelectOption(StringModeCombo, _selectedItem.VerdictSource.StringMode);
@@ -705,7 +695,7 @@ public sealed partial class SequenceEditorView : UserControl
             .Select(pair => new VariableEntry
             {
                 Name = pair.Key,
-                ValueText = EditorValueConverter.Format(pair.Value)
+                ValueText = SettingsValueConverter.Format(pair.Value)
             })
             .ToList();
         VariablesList.ItemsSource = null;
@@ -1009,12 +999,22 @@ public sealed partial class SequenceEditorView : UserControl
     private void AddItem_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         var item = new TestItemDefinition { Name = "新测试项" };
-        var plugin = _pluginRegistry.GetRequired("basic.limit-check");
-        var main = CreateStep(plugin, "主检查");
-        item.MainSteps.Add(main);
-        item.VerdictSource.StepId = main.Id;
-        item.VerdictSource.OutputKey = "verdict";
-        item.VerdictSource.JudgeType = VerdictJudgeType.PassFail;
+
+        // Seeded with a built-in check when that plugin package is installed. It is loaded from the
+        // plugin directory, so it may not be there; the item is still created and the operator adds
+        // the first step themselves.
+        if (_pluginRegistry.TryGet("basic.limit-check", out var plugin))
+        {
+            var main = CreateStep(plugin, "主检查");
+            item.MainSteps.Add(main);
+            item.VerdictSource.StepId = main.Id;
+            item.VerdictSource.OutputKey = "verdict";
+            item.VerdictSource.JudgeType = VerdictJudgeType.PassFail;
+        }
+        else
+        {
+            AppendLog("未安装 basic.limit-check 插件，新测试项为空，请手动添加步骤。");
+        }
 
         _sequence.Items.Add(item);
         MarkDirty();
@@ -1051,7 +1051,7 @@ public sealed partial class SequenceEditorView : UserControl
         VariableNameBox.Text = _selectedVariableName ?? string.Empty;
         VariableValueBox.Text = _selectedVariableName is not null &&
                                 _sequence.Variables.TryGetValue(_selectedVariableName, out var value)
-            ? EditorValueConverter.Format(value)
+            ? SettingsValueConverter.Format(value)
             : string.Empty;
         _updating = wasUpdating;
     }
@@ -1092,7 +1092,7 @@ public sealed partial class SequenceEditorView : UserControl
             return;
         }
 
-        var parsed = EditorValueConverter.Parse(VariableValueBox.Text);
+        var parsed = SettingsValueConverter.Parse(VariableValueBox.Text);
         if (!Equals(_sequence.Variables[_selectedVariableName], parsed))
         {
             _sequence.Variables[_selectedVariableName] = parsed;
@@ -1757,7 +1757,7 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            if (EditorValueConverter.TryParseNullableDouble(NumericLowerBox.Text, out var value))
+            if (SettingsValueConverter.TryParseNullableDouble(NumericLowerBox.Text, out var value))
             {
                 _numericLowerInputValid = true;
                 // TextBox 的 TextChanged 可能经 Dispatcher 延迟触发（初始化赋值后、_updating 已复位），
@@ -1781,7 +1781,7 @@ public sealed partial class SequenceEditorView : UserControl
     {
         if (!_updating && _selectedItem is not null)
         {
-            if (EditorValueConverter.TryParseNullableDouble(NumericUpperBox.Text, out var value))
+            if (SettingsValueConverter.TryParseNullableDouble(NumericUpperBox.Text, out var value))
             {
                 _numericUpperInputValid = true;
                 if (!Nullable.Equals(_selectedItem.VerdictSource.UpperLimit, value))

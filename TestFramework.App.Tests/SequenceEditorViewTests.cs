@@ -53,7 +53,7 @@ public sealed class SequenceEditorViewTests
     }
 
     [Fact]
-    public async Task PluginPicker_GroupsBuiltInStepsUnderBuiltInCategory()
+    public async Task PluginPicker_GroupsPluginsByTheFolderTheyWereDeployedIn()
     {
         var root = Path.Combine(Path.GetTempPath(), "TestFrameworkTests", Guid.NewGuid().ToString("N"));
         using var session = HeadlessUnitTestSession.StartNew(typeof(SkiaRenderTestApp));
@@ -68,9 +68,11 @@ public sealed class SequenceEditorViewTests
                 var pluginTree = picker.FindControl<TreeView>("PluginTree")!;
                 var categories = Assert.IsAssignableFrom<IEnumerable<SequenceEditorView.PluginTreeNode>>(pluginTree.ItemsSource).ToList();
 
-                var builtIn = Assert.Single(categories, category => category.Title == "内置");
-                Assert.Equal(4, builtIn.Children.Count);
-                Assert.All(builtIn.Children, plugin => Assert.NotNull(plugin.Plugin));
+                // The built-in steps are deployed to Plugins/BasicSteps and are grouped by that
+                // folder, exactly like any third-party package: nothing about them is special-cased.
+                var basicSteps = Assert.Single(categories, category => category.Title == "BasicSteps");
+                Assert.Equal(4, basicSteps.Children.Count);
+                Assert.All(basicSteps.Children, plugin => Assert.NotNull(plugin.Plugin));
             }, CancellationToken.None);
         }
         finally

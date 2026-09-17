@@ -19,7 +19,8 @@ TestFramework 是一个基于 .NET 和 Avalonia 的测试序列编辑与执行�
 - `TestFramework.Core`：插件注册、插件加载、序列运行器、变量解析。
 - `TestFramework.SequenceYaml`：YAML 读写和序列校验。
 - `TestFramework.Plugin.Abstractions.UI`：测试步骤设置编辑器 UI 契约。
-- `TestFramework.Plugins.BasicSteps`：内置基础测试步骤插件。
+- `TestFramework.Plugins.BasicSteps`：基础测试步骤插件，按插件方式构建，不编译进任何宿主。
+- `TestFramework.Plugins.BasicSteps.UI`：上述插件的设置界面。
 - `TestFramework.App`：Avalonia 桌面序列编辑器和运行入口。
 - `TestFramework.Tests`：核心逻辑单元测试。
 - `TestFramework.App.Tests`：桌面编辑器与运行流程的界面级测试。
@@ -83,4 +84,16 @@ config/sequence/*.yml
 - **资源插件契约只读**：`IInstrumentDriverPlugin` 等在创建资源时拿到的是 `IResourceScope`，只能查询已创建的仪器/传输/服务，不能注册或释放宿主容器——容器由宿主持有，供整个运行期所有资源共享。
 - **信任边界**：插件加载不做签名或哈希校验，插件代码以宿主权限在同一进程内运行。因此对插件目录的写权限等同于以当前用户身份执行代码，部署时需要相应保护该目录。只读契约防的是误用，不是沙箱。
 
-更多架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+### 框架契约版本
+
+- 插件程序集用 `[assembly: TestFrameworkPlugin("1.0")]` 声明所需的**最低框架契约版本**。宿主在实例化任何类型之前读取该声明，版本高于宿主能提供的直接拒绝整个程序集并给出明确原因，插件代码一行都不会执行。未声明的按基线 1.0 处理。
+- 契约版本与包版本无关：包按自己的节奏发布，契约版本只在插件所面对的接口变化时才动。
+- 框架承诺**高版本兼容低版本插件**：已有插件接口新增成员必须带默认实现，已有成员签名与语义永不改变；做不到的变更即为新的主契约版本。
+
+### 交付与解耦
+
+- 框架发布 4 个 NuGet 包：`Abstractions`（插件契约）、`Plugin.Abstractions.UI`（界面契约）、`Core`（运行器与加载器）、`SequenceYaml`（序列文件与校验）。宿主引用 `Core` 与 `SequenceYaml`，插件仓库只引用 `Abstractions`（提供配置界面时再加 `Plugin.Abstractions.UI`）。
+- 插件本身不发包，交付物是投放到宿主 `Plugins/` 目录的 DLL；宿主对插件没有任何编译期依赖。`TestFramework.App` 对内置插件使用 `ReferenceOutputAssembly="false"`，只保证先构建再复制到 `Plugins/BasicSteps/`，App 内无法引用插件类型 —— 内置步骤因此走的是与第三方插件完全相同的加载路径。
+- 插件的设置界面单独成一个程序集（`MyPlugin.UI.dll`），运行时插件保持无 Avalonia 依赖，无头/CI 宿主只需投放运行时 DLL。
+
+插件开发详见 [docs/plugin-development.md](docs/plugin-development.md)，更多架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。

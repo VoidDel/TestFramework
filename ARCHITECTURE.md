@@ -6,8 +6,20 @@
 - `TestFramework.Core`: plugin registry, plugin loader, and sequence runner.
 - `TestFramework.SequenceYaml`: YAML load/save plus sequence validation.
 - `TestFramework.Plugin.Abstractions.UI`: Avalonia settings editor contract for step plugins.
-- `TestFramework.Plugins.BasicSteps`: built-in example step plugins.
+- `TestFramework.Plugins.BasicSteps`: the built-in step plugins, built as a plugin package rather
+  than as part of any host.
+- `TestFramework.Plugins.BasicSteps.UI`: the settings editors for those plugins.
 - `TestFramework.App`: Avalonia sequence editor and runner shell.
+
+`Abstractions`, `Plugin.Abstractions.UI`, `Core` and `SequenceYaml` are the shipped libraries and
+are the only packable projects. Hosts reference `Core` and `SequenceYaml`; plugin repositories
+reference only `Abstractions`, plus `Plugin.Abstractions.UI` when they supply a settings editor.
+
+A plugin is never referenced by a host. `TestFramework.App` depends on the built-in plugins only
+through `ReferenceOutputAssembly="false"`, which builds them without putting them on the compile
+references and stages the output into `Plugins/BasicSteps`. Nothing in the app can name a plugin
+type, so the built-in steps travel exactly the path a third-party plugin does - the only way that
+path stays honest. See `docs/plugin-development.md` for the plugin repository layout.
 
 ## Sequence Shape
 
@@ -28,9 +40,38 @@ A step plugin implements `ITestStepPlugin`:
 - `SaveSettings(...)`
 - `ExecuteAsync(...)`
 
-Runtime step plugins should not depend on Avalonia. Custom parameter UI is registered in the Avalonia app through
-`PluginSettingsEditorRegistry`. For compatibility, an externally loaded plugin that also implements
-`ITestStepSettingsEditorProvider` is still registered as a settings editor by the app.
+Runtime step plugins should not depend on Avalonia: a headless or CI host loads them to execute
+sequences and has no UI to show. A settings editor is therefore a separate plugin kind,
+`IStepSettingsEditorPlugin`, which names the plugin id and version it serves instead of being
+implemented by the plugin. It conventionally ships as `MyPlugin.UI.dll` beside `MyPlugin.dll`, and a
+plugin that does not care about headless hosts can still implement it on the plugin type itself.
+
+Editors are Avalonia types, so Core cannot discover them. They are found in the same directory scan
+through `IPluginTypeHandler`, which lets a host layer contribute its own plugin kind; a second pass
+would reload every assembly and hand the host a different copy of each type. Editors are matched to
+steps with the same version rule the runner uses, so a step never loses its configuration UI to a
+version that resolved forward.
+
+## Framework Contract Version
+
+`FrameworkContract.Version` is the version of the plugin-facing surface this build exposes. It is
+separate from the package version: packages ship on their own cadence, while this number moves only
+when the surface plugins compile against changes.
+
+A plugin assembly declares the lowest contract it needs with
+`[assembly: TestFrameworkPlugin("1.0")]`. The loader reads that declaration as metadata, before
+constructing anything, and refuses an assembly needing more than this build provides - reading it
+without instantiating the attribute matters precisely because the assembly that must be refused is
+the one built against a contract this build may not be able to construct. An assembly declaring
+nothing is treated as `FrameworkContract.Baseline`, which is what a plugin predating the attribute
+targeted. The declared version is kept in the load report so a host can report what a plugin was
+built against and adapt optional calls to it.
+
+The contract is additive-only, so a newer framework keeps running older plugins. That is a
+constraint on how it may change: every member added to an existing plugin-facing interface carries a
+default implementation, and existing members never change signature or meaning. A change that cannot
+be made that way is a new major contract version, and the plugins it locks out are refused at load
+time with a message rather than failing somewhere inside a run.
 
 ## Plugin Lifecycle and Trust Boundary
 

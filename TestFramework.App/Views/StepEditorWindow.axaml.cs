@@ -4,6 +4,8 @@ using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.App.Services;
 
+using TestFramework.Plugin.Abstractions.UI;
+
 namespace TestFramework.App.Views;
 
 public sealed partial class StepEditorWindow : Window
@@ -112,7 +114,7 @@ public sealed partial class StepEditorWindow : Window
             var previewParameters = new Dictionary<string, object?>(plugin.SaveSettings(plugin.CreateDefaultSettings()), StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in _step.Parameters)
             {
-                if (!EditorValueConverter.IsVariableReference(value)) previewParameters[key] = value;
+                if (!SettingsValueConverter.IsVariableReference(value)) previewParameters[key] = value;
             }
             _settings = plugin.LoadSettings(previewParameters);
             _settingsBaselineParameters = plugin.SaveSettings(_settings);
@@ -239,7 +241,7 @@ public sealed partial class StepEditorWindow : Window
         _selectedVariableWrite = selected?.Definition;
         VariableWriteNameBox.Text = _selectedVariableWrite?.Name ?? string.Empty;
         VariableWriteOutputKeyBox.Text = _selectedVariableWrite?.OutputKey ?? string.Empty;
-        VariableWriteValueBox.Text = EditorValueConverter.Format(_selectedVariableWrite?.Value);
+        VariableWriteValueBox.Text = SettingsValueConverter.Format(_selectedVariableWrite?.Value);
         VariableWriteOnErrorBox.IsChecked = _selectedVariableWrite?.WriteOnError ?? false;
 
         _updating = wasUpdating;
@@ -324,7 +326,7 @@ public sealed partial class StepEditorWindow : Window
         ParameterValueBox.Text = _step is not null &&
                                  _selectedParameterKey is not null &&
                                  _step.Parameters.TryGetValue(_selectedParameterKey, out var value)
-            ? EditorValueConverter.Format(value)
+            ? SettingsValueConverter.Format(value)
             : string.Empty;
         _updating = wasUpdating;
     }
@@ -363,7 +365,7 @@ public sealed partial class StepEditorWindow : Window
             return;
         }
 
-        _step.Parameters[_selectedParameterKey] = EditorValueConverter.Parse(ParameterValueBox.Text);
+        _step.Parameters[_selectedParameterKey] = SettingsValueConverter.Parse(ParameterValueBox.Text);
     }
 
     private void AddParameter_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -403,7 +405,7 @@ public sealed partial class StepEditorWindow : Window
         _updating = true;
         VariableWriteNameBox.Text = _selectedVariableWrite?.Name ?? string.Empty;
         VariableWriteOutputKeyBox.Text = _selectedVariableWrite?.OutputKey ?? string.Empty;
-        VariableWriteValueBox.Text = EditorValueConverter.Format(_selectedVariableWrite?.Value);
+        VariableWriteValueBox.Text = SettingsValueConverter.Format(_selectedVariableWrite?.Value);
         VariableWriteOnErrorBox.IsChecked = _selectedVariableWrite?.WriteOnError ?? false;
         _updating = wasUpdating;
     }
@@ -438,7 +440,7 @@ public sealed partial class StepEditorWindow : Window
         }
 
         _selectedVariableWrite.Value = string.IsNullOrWhiteSpace(_selectedVariableWrite.OutputKey)
-            ? EditorValueConverter.Parse(VariableWriteValueBox.Text)
+            ? SettingsValueConverter.Parse(VariableWriteValueBox.Text)
             : null;
     }
 

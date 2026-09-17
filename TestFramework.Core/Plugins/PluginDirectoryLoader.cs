@@ -17,13 +17,18 @@ public sealed class PluginDirectoryLoader
 {
     private readonly IPluginRegistry _stepPlugins;
     private readonly ResourcePluginRegistry _resourcePlugins;
+    private readonly IReadOnlyList<IPluginTypeHandler> _extraHandlers;
 
-    public PluginDirectoryLoader(IPluginRegistry stepPlugins, ResourcePluginRegistry resourcePlugins)
+    public PluginDirectoryLoader(
+        IPluginRegistry stepPlugins,
+        ResourcePluginRegistry resourcePlugins,
+        IEnumerable<IPluginTypeHandler>? extraHandlers = null)
     {
         ArgumentNullException.ThrowIfNull(stepPlugins);
         ArgumentNullException.ThrowIfNull(resourcePlugins);
         _stepPlugins = stepPlugins;
         _resourcePlugins = resourcePlugins;
+        _extraHandlers = extraHandlers?.ToArray() ?? [];
     }
 
     public PluginDirectoryLoadReport LoadFromDirectory(string directory)
@@ -56,8 +61,21 @@ public sealed class PluginDirectoryLoader
         }
 
         var loadedBefore = report.LoadedCount;
+        var extraRegistered = 0;
         try
         {
+            // Checked before any plugin type is constructed: a plugin needing a contract this build
+            // does not have must be refused outright, not left to fail as a missing member somewhere
+            // inside a run.
+            var requiredContract = PluginContractReader.ReadMinimumFrameworkVersion(handle.Assembly);
+            report.AssemblyContracts[file] = requiredContract;
+            if (!FrameworkContract.Supports(requiredContract))
+            {
+                report.AddFailure(file, new NotSupportedException(
+                    $"Plugin requires framework contract {requiredContract} but this build provides {FrameworkContract.Version}. Update the host, or rebuild the plugin against contract {FrameworkContract.Version}."));
+                return;
+            }
+
             var types = PluginAssemblyScan.GetLoadableTypes(handle.Assembly, out var typeLoadFailure);
             if (typeLoadFailure is not null)
             {
@@ -66,6 +84,18 @@ public sealed class PluginDirectoryLoader
 
             RegisterStepPlugins(types, file, report);
             RegisterResourcePlugins(types, file, report);
+
+            foreach (var handler in _extraHandlers)
+            {
+                try
+                {
+                    extraRegistered += handler.Register(types, file, report.Failures);
+                }
+                catch (Exception ex)
+                {
+                    report.AddFailure(file, ex);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -73,7 +103,7 @@ public sealed class PluginDirectoryLoader
         }
         finally
         {
-            if (report.LoadedCount == loadedBefore)
+            if (report.LoadedCount == loadedBefore && extraRegistered == 0)
             {
                 PluginAssemblyCatalog.ReleaseIfUnused(handle);
             }

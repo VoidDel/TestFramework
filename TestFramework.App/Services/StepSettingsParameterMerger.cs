@@ -1,3 +1,5 @@
+using TestFramework.Plugin.Abstractions.UI;
+
 namespace TestFramework.App.Services;
 
 internal static class StepSettingsParameterMerger
@@ -32,8 +34,8 @@ internal static class StepSettingsParameterMerger
         existing = null;
         return current.TryGetValue(key, out existing) &&
                baseline.TryGetValue(key, out var baselineValue) &&
-               EditorValueConverter.ValuesEqual(value, baselineValue) &&
-               (EditorValueConverter.IsVariableReference(existing) ||
-                !EditorValueConverter.ValuesEqual(existing, baselineValue));
+               SettingsValueConverter.ValuesEqual(value, baselineValue) &&
+               (SettingsValueConverter.IsVariableReference(existing) ||
+                !SettingsValueConverter.ValuesEqual(existing, baselineValue));
     }
 }

@@ -15,4 +15,26 @@
     <ProjectReference Include="..\TestFramework.App\TestFramework.App.csproj" />
     <ProjectReference Include="..\TestFramework.Abstractions\TestFramework.Abstractions.csproj" />
   </ItemGroup>
+
+  <!--
+    The editor loads its steps from the plugin directory, so the tests need the built-in plugin
+    package staged the same way a deployment stages it. Referenced without an output assembly: these
+    tests must not be able to name plugin types, only load them like the app does.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\TestFramework.Plugins.BasicSteps\TestFramework.Plugins.BasicSteps.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="BundledPlugin" />
+    <ProjectReference Include="..\TestFramework.Plugins.BasicSteps.UI\TestFramework.Plugins.BasicSteps.UI.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="BundledPlugin" />
+  </ItemGroup>
+
+  <Target Name="CopyBundledPlugins" AfterTargets="Build">
+    <Copy SourceFiles="@(BundledPlugin)"
+          DestinationFolder="$(OutDir)Plugins\BasicSteps"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

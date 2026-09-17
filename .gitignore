@@ -9,3 +9,4 @@ ConsoleApp1/
 .serena/
 *.nupkg
 results/
+artifacts/

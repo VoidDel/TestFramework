@@ -4,19 +4,17 @@ using Avalonia.Controls;
 using TestFramework.Plugin.Abstractions.UI;
 using TestFramework.Plugins.BasicSteps.Settings;
 
-namespace TestFramework.App.Services;
+namespace TestFramework.Plugins.BasicSteps.UI;
 
-public static class BasicStepSettingsEditors
+/// <summary>
+/// The settings editors for the built-in step plugins. They ship in this assembly rather than in
+/// the plugins themselves so <c>TestFramework.Plugins.BasicSteps.dll</c> stays free of Avalonia and
+/// loads in a headless host, and they ship here rather than in the desktop app so the plugin and
+/// its UI can move to their own repository together.
+/// </summary>
+internal static class BasicStepSettingsEditors
 {
-    public static void Register(PluginSettingsEditorRegistry registry)
-    {
-        registry.Register("basic.delay", new Version(1, 0, 0), CreateDelayEditor);
-        registry.Register("basic.log", new Version(1, 0, 0), CreateLogEditor);
-        registry.Register("basic.limit-check", new Version(1, 0, 0), CreateLimitCheckEditor);
-        registry.Register("basic.throw", new Version(1, 0, 0), CreateThrowEditor);
-    }
-
-    private static Control CreateDelayEditor(object settings, ISettingsEditContext context)
+    internal static Control CreateDelayEditor(object settings, ISettingsEditContext context)
     {
         var typed = (DelayStepSettings)settings;
         var panel = CreatePanel();
@@ -24,7 +22,7 @@ public static class BasicStepSettingsEditors
         return panel;
     }
 
-    private static Control CreateLogEditor(object settings, ISettingsEditContext context)
+    internal static Control CreateLogEditor(object settings, ISettingsEditContext context)
     {
         var typed = (LogStepSettings)settings;
         var panel = CreatePanel();
@@ -32,7 +30,7 @@ public static class BasicStepSettingsEditors
         return panel;
     }
 
-    private static Control CreateLimitCheckEditor(object settings, ISettingsEditContext context)
+    internal static Control CreateLimitCheckEditor(object settings, ISettingsEditContext context)
     {
         var typed = (LimitCheckStepSettings)settings;
         var panel = CreatePanel();
@@ -42,7 +40,7 @@ public static class BasicStepSettingsEditors
         return panel;
     }
 
-    private static Control CreateThrowEditor(object settings, ISettingsEditContext context)
+    internal static Control CreateThrowEditor(object settings, ISettingsEditContext context)
     {
         var typed = (ThrowStepSettings)settings;
         var panel = CreatePanel();
@@ -169,11 +167,11 @@ public static class BasicStepSettingsEditors
             var raw = bindingContext.GetParameterValue(parameterKey);
             if (raw is not null)
             {
-                return EditorValueConverter.Format(raw);
+                return SettingsValueConverter.Format(raw);
             }
         }
 
-        return EditorValueConverter.Format(value);
+        return SettingsValueConverter.Format(value);
     }
 
     private static void SetRawParameter(ISettingsEditContext context, string parameterKey, object? value)
@@ -189,4 +187,46 @@ public static class BasicStepSettingsEditors
         return text.Contains("${", StringComparison.Ordinal);
     }
 
+}
+
+/// <summary>Base for the built-in editors; each one only names the plugin it serves.</summary>
+public abstract class BasicStepEditorPlugin : IStepSettingsEditorPlugin
+{
+    public abstract string PluginId { get; }
+
+    public Version PluginVersion { get; } = new(1, 0, 0);
+
+    public abstract Control CreateEditor(object settings, ISettingsEditContext context);
+}
+
+public sealed class DelayStepEditorPlugin : BasicStepEditorPlugin
+{
+    public override string PluginId => "basic.delay";
+
+    public override Control CreateEditor(object settings, ISettingsEditContext context) =>
+        BasicStepSettingsEditors.CreateDelayEditor(settings, context);
+}
+
+public sealed class LogStepEditorPlugin : BasicStepEditorPlugin
+{
+    public override string PluginId => "basic.log";
+
+    public override Control CreateEditor(object settings, ISettingsEditContext context) =>
+        BasicStepSettingsEditors.CreateLogEditor(settings, context);
+}
+
+public sealed class LimitCheckStepEditorPlugin : BasicStepEditorPlugin
+{
+    public override string PluginId => "basic.limit-check";
+
+    public override Control CreateEditor(object settings, ISettingsEditContext context) =>
+        BasicStepSettingsEditors.CreateLimitCheckEditor(settings, context);
+}
+
+public sealed class ThrowStepEditorPlugin : BasicStepEditorPlugin
+{
+    public override string PluginId => "basic.throw";
+
+    public override Control CreateEditor(object settings, ISettingsEditContext context) =>
+        BasicStepSettingsEditors.CreateThrowEditor(settings, context);
 }

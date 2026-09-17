@@ -75,30 +75,4 @@ public sealed class PluginDirectoryLoaderTests
         Assert.Empty(report.StepPlugins);
         Assert.Empty(report.Failures);
     }
-
-    private sealed class TempPluginDirectory : IDisposable
-    {
-        public TempPluginDirectory()
-        {
-            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"tf-plugins-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(Path);
-        }
-
-        public string Path { get; }
-
-        public void Copy(System.Reflection.Assembly assembly)
-        {
-            var source = assembly.Location;
-            File.Copy(source, System.IO.Path.Combine(Path, System.IO.Path.GetFileName(source)));
-        }
-
-        public void Dispose()
-        {
-            // The plugin assemblies stay loaded, so the copies remain locked on Windows; the
-            // directory is best-effort cleanup.
-            try { Directory.Delete(Path, recursive: true); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-    }
 }

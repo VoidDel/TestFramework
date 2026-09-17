@@ -1,11 +1,12 @@
 namespace TestFramework.Core.Plugins;
 
 /// <summary>
-/// Turns scanned types into plugin instances. Step plugins and the three resource plugin kinds
+/// Turns scanned types into plugin instances. Public so hosts can discover their own plugin kinds
+/// (a settings editor, say) from the same scan. Step plugins and the three resource plugin kinds
 /// differ only in the contract they implement, so they share one implementation of the rules that
 /// matter: skip anything not constructible, and let one bad type fail on its own.
 /// </summary>
-internal static class PluginActivator
+public static class PluginActivator
 {
     public static List<TPlugin> CreateAll<TPlugin>(
         IEnumerable<Type> types,

@@ -25,6 +25,12 @@ public sealed class PluginDirectoryLoadReport
     /// </summary>
     public Dictionary<object, string> PluginPaths { get; } = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>
+    /// The framework contract each scanned assembly declared, keyed by assembly path. Hosts use it
+    /// to report what a plugin was built against and to adapt optional calls.
+    /// </summary>
+    public Dictionary<string, Version> AssemblyContracts { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     public int LoadedCount => StepPlugins.Count + InstrumentDrivers.Count + Transports.Count + Services.Count;
 
     internal void AddFailure(string assemblyPath, Exception exception)

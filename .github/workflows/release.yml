@@ -1,4 +1,4 @@
-name: Release contracts
+name: Release packages
 
 on:
   push:
@@ -32,17 +32,22 @@ jobs:
       - name: Build and test
         run: dotnet test TestFramework.sln --configuration Release --no-restore
 
-      - name: Pack plugin contracts
+      # All four shipped libraries: the two plugin contracts, and Core and SequenceYaml which a
+      # host references. Packing the solution picks up exactly the projects marked IsPackable.
+      - name: Pack libraries
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          dotnet pack TestFramework.Abstractions/TestFramework.Abstractions.csproj --configuration Release --no-build --output artifacts -p:PackageVersion=$version
-          dotnet pack TestFramework.Plugin.Abstractions.UI/TestFramework.Plugin.Abstractions.UI.csproj --configuration Release --no-build --output artifacts -p:PackageVersion=$version
+          dotnet pack TestFramework.sln --configuration Release --no-build --output artifacts -p:PackageVersion=$version
+          $expected = @('TestFramework.Abstractions', 'TestFramework.Plugin.Abstractions.UI', 'TestFramework.Core', 'TestFramework.SequenceYaml')
+          foreach ($package in $expected) {
+            if (-not (Test-Path "artifacts/$package.$version.nupkg")) { throw "Missing package: $package.$version.nupkg" }
+          }
 
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: TestFramework-contracts-${{ github.ref_name }}
+          name: TestFramework-packages-${{ github.ref_name }}
           path: artifacts/*.nupkg
 
       - name: Create GitHub release

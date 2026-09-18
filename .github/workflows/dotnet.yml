@@ -51,3 +51,14 @@ jobs:
       - name: Test solution
         if: runner.os == 'Windows'
         run: dotnet test TestFramework.sln --configuration Release --no-build
+
+      # The release workflow only runs on a tag, so a packaging break would otherwise surface at
+      # release time. Packing here proves the four libraries still produce their packages.
+      - name: Pack smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet pack TestFramework.sln --configuration Release --no-build --output pack-smoke
+          $packages = Get-ChildItem pack-smoke/*.nupkg | Select-Object -ExpandProperty Name
+          Write-Host ($packages -join "`n")
+          if ($packages.Count -ne 4) { throw "Expected 4 packages, found $($packages.Count)" }

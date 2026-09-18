@@ -90,9 +90,13 @@ registered stays rooted for the lifetime of the process:
   refusing to run. `PluginVersionPolicy` is the single implementation of this rule, shared by the
   step registry, the resource registry and the settings-editor registry, so the three cannot drift
   and a running step can never lose its configuration UI to a version mismatch.
-- `TestFramework.Abstractions` and `TestFramework.Plugin.Abstractions.UI` are shared with the host
-  rather than loaded per plugin, so plugins must build against the host's versions of those two
-  assemblies. Every other dependency is resolved inside the plugin's own context - except that a
+- `TestFramework.Abstractions`, `TestFramework.Plugin.Abstractions.UI` and every `Avalonia.*`
+  assembly are shared with the host rather than loaded per plugin, so plugins must build against
+  the host's versions of them; copies sitting in the plugin folder (which `dotnet publish` produces)
+  are ignored. Avalonia has to be shared because the UI contract's `CreateEditor` returns an Avalonia
+  `Control`: a privately loaded Avalonia would give that type a second identity and the editor
+  assembly would fail to load as not implementing the interface.
+  Every other dependency is resolved inside the plugin's own context - except that a
   dependency which is itself a file in the plugin directory is loaded once for the whole process,
   through the same catalog the directory scan uses. A settings-editor assembly depends on the step
   assembly it edits; a private copy of that step assembly would give its settings types a second

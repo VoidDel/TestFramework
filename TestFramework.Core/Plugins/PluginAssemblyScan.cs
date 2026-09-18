@@ -19,7 +19,10 @@ internal static class PluginAssemblyScan
     {
         foreach (var file in Directory.EnumerateFiles(directory, "*.dll", SearchOption.AllDirectories))
         {
-            if (IsManagedAssembly(file))
+            // A copy of an assembly the host shares (the contracts, Avalonia) is not a plugin and
+            // must never be loaded privately - see PluginAssemblyLoadContext.IsSharedWithHost.
+            // It still turns up in plugin folders, because that is what dotnet publish produces.
+            if (TryReadAssemblyName(file, out var name) && !PluginAssemblyLoadContext.IsSharedWithHost(name))
             {
                 yield return file;
             }
@@ -46,13 +49,27 @@ internal static class PluginAssemblyScan
         }
     }
 
-    private static bool IsManagedAssembly(string path)
+    /// <summary>Reads the assembly name from the file's metadata; false for anything that is not a managed assembly.</summary>
+    private static bool TryReadAssemblyName(string path, out AssemblyName name)
     {
+        name = null!;
         try
         {
             using var stream = File.OpenRead(path);
             using var reader = new PEReader(stream);
-            return reader.HasMetadata && reader.GetMetadataReader().IsAssembly;
+            if (!reader.HasMetadata)
+            {
+                return false;
+            }
+
+            var metadata = reader.GetMetadataReader();
+            if (!metadata.IsAssembly)
+            {
+                return false;
+            }
+
+            name = new AssemblyName(metadata.GetString(metadata.GetAssemblyDefinition().Name));
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or BadImageFormatException)
         {

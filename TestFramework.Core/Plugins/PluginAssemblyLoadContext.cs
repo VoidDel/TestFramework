@@ -12,6 +12,25 @@ internal sealed class PluginAssemblyLoadContext : AssemblyLoadContext
         "TestFramework.Plugin.Abstractions.UI"
     };
 
+    /// <summary>
+    /// True for an assembly the host provides and every plugin must share rather than carry.
+    ///
+    /// The two contract assemblies are the obvious case. Avalonia is the less obvious one: the UI
+    /// contract's <c>CreateEditor</c> returns an Avalonia <c>Control</c>, so an editor plugin that
+    /// resolved Avalonia privately would implement the interface with a <c>Control</c> of a
+    /// different identity - and the runtime then reports that the type "does not have an
+    /// implementation". A plugin folder produced by <c>dotnet publish</c> contains the Avalonia
+    /// assemblies, so this is what a plugin author hits by default without the rule.
+    /// </summary>
+    internal static bool IsSharedWithHost(AssemblyName assemblyName)
+    {
+        var name = assemblyName.Name;
+        return name is not null &&
+               (SharedAssemblyNames.Contains(name) ||
+                name.Equals("Avalonia", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("Avalonia.", StringComparison.OrdinalIgnoreCase));
+    }
+
     private readonly AssemblyDependencyResolver _resolver;
     private readonly string _pluginDirectory;
 
@@ -29,9 +48,19 @@ internal sealed class PluginAssemblyLoadContext : AssemblyLoadContext
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
-        if (assemblyName.Name is not null && SharedAssemblyNames.Contains(assemblyName.Name))
+        if (IsSharedWithHost(assemblyName))
         {
-            return Default.LoadFromAssemblyName(assemblyName);
+            // A headless host has no Avalonia to share. Returning null lets the runtime fall back
+            // to the default probing, which fails with the missing assembly's name rather than
+            // with a FileNotFoundException thrown out of this override.
+            try
+            {
+                return Default.LoadFromAssemblyName(assemblyName);
+            }
+            catch (FileNotFoundException)
+            {
+                return null;
+            }
         }
 
         var assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);

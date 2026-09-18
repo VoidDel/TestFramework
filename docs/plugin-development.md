@@ -170,7 +170,8 @@ Plugins/
 - 每个插件建议独占一个子目录，其依赖放在同级。子目录名会成为插件选择器里的分组名。
 - 原生 DLL 和不含插件类型的程序集会被静默跳过，不会报错。
 - 每个程序集加载到独立的可回收 `AssemblyLoadContext`，插件之间的依赖版本互不冲突。
-- `TestFramework.Abstractions` 与 `TestFramework.Plugin.Abstractions.UI` 由宿主共享，**不要**把这两个 DLL 放进插件目录；插件必须针对宿主提供的版本编译。
+- `TestFramework.Abstractions`、`TestFramework.Plugin.Abstractions.UI` 以及全部 `Avalonia.*` 程序集由宿主共享：即使它们随 `dotnet publish` 一起出现在插件目录里，也会被忽略并解析到宿主的版本。插件必须针对宿主提供的这些版本编译。共享 Avalonia 不是可选项——设置界面契约的 `CreateEditor` 返回 Avalonia 的 `Control`，插件私有的另一份 Avalonia 会让这个类型身份不一致，整个程序集报"没有实现"而无法加载。
+- 同一目录里被多个程序集共同依赖的文件（典型的是 `MyPlugin.UI.dll` 依赖 `MyPlugin.dll`）在整个进程中只加载一份，所以设置界面拿到的设置对象与运行时插件创建的是同一个类型。
 
 ## 7. 生命周期限制
 

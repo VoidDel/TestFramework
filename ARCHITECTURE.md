@@ -9,15 +9,21 @@
 - `TestFramework.Plugins.BasicSteps`: the built-in step plugins, built as a plugin package rather
   than as part of any host.
 - `TestFramework.Plugins.BasicSteps.UI`: the settings editors for those plugins.
-- `TestFramework.App`: Avalonia sequence editor and runner shell.
 
 `Abstractions`, `Plugin.Abstractions.UI`, `Core` and `SequenceYaml` are the shipped libraries and
 are the only packable projects. Hosts reference `Core` and `SequenceYaml`; plugin repositories
 reference only `Abstractions`, plus `Plugin.Abstractions.UI` when they supply a settings editor.
 
-A plugin is never referenced by a host. `TestFramework.App` depends on the built-in plugins only
-through `ReferenceOutputAssembly="false"`, which builds them without putting them on the compile
-references and stages the output into `Plugins/BasicSteps`. Nothing in the app can name a plugin
+**There is no host in this repository.** A host is an application with its own release cadence,
+its own operators and its own opinions about layout; keeping one here made the framework's shape
+follow whatever that one application happened to need. The reference host is the `BMS-TEST`
+repository, checked out beside this one, which consumes these four packages from a folder feed - so
+it can only use what they publish, and a private change here breaks its build rather than going
+unnoticed.
+
+A plugin is never referenced by a host either. The built-in steps are not packed: they are staged
+as files into `artifacts/plugins/BasicSteps`, which a host copies into its own `Plugins/`
+directory, and the release workflow zips the same folder. Nothing in a host can name a plugin
 type, so the built-in steps travel exactly the path a third-party plugin does - the only way that
 path stays honest. See `docs/plugin-development.md` for the plugin repository layout.
 
@@ -140,11 +146,11 @@ On step exception or timeout, the runner creates an `Error` result and applies t
 
 Cleanup steps run when normal execution completes and after both `Stop` and `JumpToCleanup` errors, provided the preceding plugin has exited. They also run after user cancellation, so the device under test is restored rather than left in whatever state the interrupted step produced. Cancellation cleanup runs on a fresh token bounded by `TestSequenceRunner.CleanupGracePeriod` (30 seconds by default), because the user's token is already cancelled and would abort every cleanup step immediately. A cleanup step that outlives the grace period is abandoned and the run still reports `Cancelled`. Cleanup is suppressed entirely when a previous step was quarantined, since its resources may still be in use.
 
-Step execution (including synchronous plugin code and settings loading) runs off the UI thread. The host bounds its wait by the step timeout and user cancellation. A plugin that exits more than 100 ms after cancellation is quarantined: the sequence stops without executing further steps or cleanup against the same resources. `HasPendingExecution` records this condition in the result. A host using `TestSequenceRunner` directly must await `PendingStepsCompletion` before releasing resources or reusing plugin instances. The desktop `SequenceRunService` does this automatically and blocks new runs while recovery is pending. Resource cleanup attempts every resource and aggregates failures; cleanup failures block further desktop runs until the application is restarted.
+Step execution (including synchronous plugin code and settings loading) runs off the UI thread. The host bounds its wait by the step timeout and user cancellation. A plugin that exits more than 100 ms after cancellation is quarantined: the sequence stops without executing further steps or cleanup against the same resources. `HasPendingExecution` records this condition in the result. A host using `TestSequenceRunner` directly must await `PendingStepsCompletion` before releasing resources or reusing plugin instances, and must keep the resources alive until it completes. Resource cleanup attempts every resource and aggregates failures. A host is expected to surface a cleanup failure and stop accepting runs: the device state is unknown, and the next run would measure against it.
 
 In-process .NET plugins cannot be forcibly terminated safely. Quarantine prevents concurrent reuse, but does not stop native calls or hardware commands already in progress. Hard termination requires a separate plugin worker process, which is outside the current execution model.
 
-Cancellation throws `TestSequenceCancelledException` (an `OperationCanceledException`) from the core runner. Its `Result` includes completed steps, the interrupted step, variable snapshots, timestamps and a `Cancelled` verdict. The desktop service returns that partial result for JSON persistence. Configured verdict output keys that are absent produce `Error`, never a fallback `Pass`.
+Cancellation throws `TestSequenceCancelledException` (an `OperationCanceledException`) from the core runner. Its `Result` includes completed steps, the interrupted step, variable snapshots, timestamps and a `Cancelled` verdict - a host should persist it rather than discard it, because it is the record of what the device under test was actually asked to do. Configured verdict output keys that are absent produce `Error`, never a fallback `Pass`.
 
 ## Variables
 

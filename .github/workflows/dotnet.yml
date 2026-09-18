@@ -31,25 +31,13 @@ jobs:
       - name: Restore
         run: dotnet restore TestFramework.sln
 
-      - name: Build libraries
-        if: runner.os != 'Windows'
-        run: >-
-          dotnet build TestFramework.Abstractions/TestFramework.Abstractions.csproj --configuration Release --no-restore &&
-          dotnet build TestFramework.Core/TestFramework.Core.csproj --configuration Release --no-restore &&
-          dotnet build TestFramework.SequenceYaml/TestFramework.SequenceYaml.csproj --configuration Release --no-restore &&
-          dotnet build TestFramework.Plugins.BasicSteps/TestFramework.Plugins.BasicSteps.csproj --configuration Release --no-restore &&
-          dotnet build TestFramework.Tests/TestFramework.Tests.csproj --configuration Release --no-restore
-
+      # Every project here is a library, a plugin or a headless test project. Since the desktop
+      # host moved out of this repository there is nothing left that needs a display, so both
+      # legs build and test the whole solution rather than a per-OS subset.
       - name: Build solution
-        if: runner.os == 'Windows'
         run: dotnet build TestFramework.sln --configuration Release --no-restore
 
-      - name: Test core
-        if: runner.os != 'Windows'
-        run: dotnet test TestFramework.Tests/TestFramework.Tests.csproj --configuration Release --no-build
-
       - name: Test solution
-        if: runner.os == 'Windows'
         run: dotnet test TestFramework.sln --configuration Release --no-build
 
       # The release workflow only runs on a tag, so a packaging break would otherwise surface at
@@ -62,3 +50,17 @@ jobs:
           $packages = Get-ChildItem pack-smoke/*.nupkg | Select-Object -ExpandProperty Name
           Write-Host ($packages -join "`n")
           if ($packages.Count -ne 4) { throw "Expected 4 packages, found $($packages.Count)" }
+
+      # The built-in step plugins are delivered as files into a host's Plugins/ directory, not as a
+      # package, so their staging is not covered by the pack smoke test. A host copies from this
+      # folder, which makes an empty one a broken delivery.
+      - name: Built-in plugin package staged
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $staged = Get-ChildItem artifacts/plugins/BasicSteps -Filter *.dll -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name
+          Write-Host ($staged -join "`n")
+          foreach ($expected in @('TestFramework.Plugins.BasicSteps.dll', 'TestFramework.Plugins.BasicSteps.UI.dll')) {
+            if ($staged -notcontains $expected) { throw "Missing staged plugin: $expected" }
+          }

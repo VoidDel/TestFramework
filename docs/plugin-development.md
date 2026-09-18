@@ -158,7 +158,7 @@ public sealed class MyStepEditorPlugin : IStepSettingsEditorPlugin
 宿主扫描自己的 `Plugins` 目录（含子目录）：
 
 ```
-TestFramework.App.exe
+MyTestHost.exe
 Plugins/
   MyPlugin/
     MyPlugin.dll

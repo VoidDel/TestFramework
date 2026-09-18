@@ -148,6 +148,12 @@ Cancellation throws `TestSequenceCancelledException` (an `OperationCanceledExcep
 Variables are sequence-scoped runtime values. `TestSequence.Variables` defines the initial values, and the runner keeps a
 case-insensitive mutable variable table for the whole sequence run.
 
+In a sequence file, values under `variables`, `parameters` and `settings` carry their YAML type: an unquoted `5.0` loads
+as a double, `7` as an int, `true` as a bool, and a quoted scalar as a string. Saving quotes any string that would read
+back as another type (`"007"`, `"true"`) and writes whole doubles with a fraction (`5.0`), so a value keeps its type
+across a round trip. Plugins therefore receive numbers as numbers; they should still accept the string form, which is
+what a hand-written file or a text field can carry.
+
 Step parameters can reference variables with `${name}`:
 
 - When the whole parameter value is a single placeholder, the original variable type is preserved. For example,

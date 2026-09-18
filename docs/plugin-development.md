@@ -129,6 +129,7 @@ public sealed class MyStepPlugin : ITestStepPlugin
 - 插件类必须有**公开无参构造函数**，宿主用它实例化。
 - 构造函数抛异常只影响该类型，同程序集内其它插件照常加载。
 - 变量引用（`${name}`）在 `LoadSettings` 之前已解析完毕，插件拿到的是普通值。
+- 参数值带着 YAML 标量类型到达：文件里未加引号的 `5.0` 是 double、`7` 是 int、`true` 是 bool，加引号的是字符串；保存时会给形似数字或布尔的字符串加引号，类型经往返不变。`LoadSettings` 应同时接受数字与字符串两种形式（内置的 `SettingsMap` 即如此），手写文件或文本输入都可能给出字符串。
 - 输出写入 `TestStepResult.Outputs`，序列通过 `verdictSource.outputKey` 取用。
 
 ## 5. 实现设置界面

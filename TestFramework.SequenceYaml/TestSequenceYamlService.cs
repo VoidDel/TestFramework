@@ -11,15 +11,21 @@ public sealed class TestSequenceYamlService
     /// <summary>Maximum collection nesting the editor will parse; see <see cref="RejectUnsupportedRoundTripSyntax"/>.</summary>
     private const int MaxNestingDepth = 64;
 
+    // Values in variables, parameters and settings are typed the way YAML types them: an unquoted
+    // 5.0 is a double, 7 an int, true a bool, and a quoted scalar is a string. Loading infers those
+    // types, and saving quotes any string that would read back as something else, so a value keeps
+    // its type across a round trip - which is what lets a plugin receive a number as a number.
     private readonly ISerializer _serializer = new SerializerBuilder()
+        .WithQuotingNecessaryStrings()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .DisableAliases()
-        .WithEventEmitter(next => new NullLikeStringEventEmitter(next))
+        .WithEventEmitter(next => new RoundTripScalarEventEmitter(next), where => where.OnBottom())
         .Build();
 
     private readonly IDeserializer _deserializer = new DeserializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .WithDuplicateKeyChecking()
+        .WithNodeTypeResolver(new PlainScalarTypeResolver(), where => where.OnTop())
         .Build();
 
     public TestSequence LoadFromFile(string filePath)

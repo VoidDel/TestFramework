@@ -44,14 +44,28 @@ jobs:
             if (-not (Test-Path "artifacts/$package.$version.nupkg")) { throw "Missing package: $package.$version.nupkg" }
           }
 
+      # The built-in step plugins ship as files, not as a package: a host has no compile-time
+      # dependency on a plugin, so there is nothing for it to reference. A host unpacks this zip
+      # into the folder it stages its Plugins/ directory from.
+      - name: Zip the built-in plugin package
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          foreach ($expected in @('TestFramework.Plugins.BasicSteps.dll', 'TestFramework.Plugins.BasicSteps.UI.dll')) {
+            if (-not (Test-Path "artifacts/plugins/BasicSteps/$expected")) { throw "Missing staged plugin: $expected" }
+          }
+          Compress-Archive -Path artifacts/plugins/BasicSteps/* -DestinationPath "artifacts/TestFramework.Plugins.BasicSteps-$version.zip" -Force
+
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
           name: TestFramework-packages-${{ github.ref_name }}
-          path: artifacts/*.nupkg
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.zip
 
       - name: Create GitHub release
         shell: pwsh
-        run: gh release create $env:GITHUB_REF_NAME artifacts/*.nupkg --generate-notes --title $env:GITHUB_REF_NAME
+        run: gh release create $env:GITHUB_REF_NAME artifacts/*.nupkg artifacts/*.zip --generate-notes --title $env:GITHUB_REF_NAME
         env:
           GH_TOKEN: ${{ github.token }}

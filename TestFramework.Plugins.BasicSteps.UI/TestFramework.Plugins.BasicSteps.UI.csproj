@@ -11,4 +11,27 @@
     <ProjectReference Include="..\TestFramework.Plugin.Abstractions.UI\TestFramework.Plugin.Abstractions.UI.csproj" />
     <ProjectReference Include="..\TestFramework.Plugins.BasicSteps\TestFramework.Plugins.BasicSteps.csproj" />
   </ItemGroup>
+
+  <!--
+    The built-in plugin package is the framework's own delivery into a host's Plugins/ directory. A
+    host has no compile-time dependency on a plugin, so it cannot arrive as a package reference:
+    artifacts/plugins is the handoff point instead - a host copies from here, and the release
+    workflow zips the same folder.
+
+    Only the two plugin assemblies are staged. Abstractions, the UI contract and Avalonia are shared
+    from the host (PluginAssemblyLoadContext.IsSharedWithHost), so copies here would be ignored at
+    best and invite a version mismatch at worst.
+  -->
+  <Target Name="StageBuiltInPluginPackage" AfterTargets="Build">
+    <ItemGroup>
+      <BuiltInPluginFile Include="$(OutDir)TestFramework.Plugins.BasicSteps.dll" />
+      <BuiltInPluginFile Include="$(OutDir)TestFramework.Plugins.BasicSteps.pdb" />
+      <BuiltInPluginFile Include="$(OutDir)TestFramework.Plugins.BasicSteps.UI.dll" />
+      <BuiltInPluginFile Include="$(OutDir)TestFramework.Plugins.BasicSteps.UI.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(BuiltInPluginFile)"
+          DestinationFolder="$(MSBuildThisFileDirectory)..\artifacts\plugins\BasicSteps"
+          SkipUnchangedFiles="true"
+          Condition="Exists('%(FullPath)')" />
+  </Target>
 </Project>

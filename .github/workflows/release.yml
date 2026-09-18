@@ -29,8 +29,15 @@ jobs:
       - name: Restore
         run: dotnet restore TestFramework.sln
 
-      - name: Build and test
-        run: dotnet test TestFramework.sln --configuration Release --no-restore
+      # Build the whole solution explicitly. `dotnet test` builds only the test projects and what
+      # they reference; since the desktop host and its tests left this repository, nothing under
+      # test references Plugin.Abstractions.UI or the plugin UI package, so a test-only build
+      # leaves them - and the staged plugin package - missing for the pack and zip steps below.
+      - name: Build
+        run: dotnet build TestFramework.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test TestFramework.sln --configuration Release --no-build
 
       # All four shipped libraries: the two plugin contracts, and Core and SequenceYaml which a
       # host references. Packing the solution picks up exactly the projects marked IsPackable.

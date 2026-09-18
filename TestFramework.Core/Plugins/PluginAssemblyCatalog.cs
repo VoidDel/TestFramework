@@ -43,6 +43,20 @@ internal static class PluginAssemblyCatalog
     }
 
     /// <summary>
+    /// Resolves a dependency one plugin has on another file in the plugin directory. It goes
+    /// through the catalog rather than straight into the requesting context because that file is
+    /// usually a plugin in its own right - a settings-editor assembly depends on the step assembly
+    /// whose settings it edits - and a copy loaded privately into the requester would give every
+    /// type in it a second identity: the editor's cast of the settings object the step plugin
+    /// created would then fail. Whichever side asks first, both end up with the same instance.
+    /// The dependency stays loaded; it is referenced, so it is never a candidate for release.
+    /// </summary>
+    public static Assembly LoadShared(string assemblyPath)
+    {
+        return Load(assemblyPath).Assembly;
+    }
+
+    /// <summary>
     /// Unloads an assembly this call had just loaded, once the caller has established that it
     /// contributes no plugins. Callers must decide that after scanning for every plugin kind:
     /// releasing on behalf of one kind alone would unload an assembly another kind still wants,

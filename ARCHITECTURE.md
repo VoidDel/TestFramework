@@ -92,7 +92,11 @@ registered stays rooted for the lifetime of the process:
   and a running step can never lose its configuration UI to a version mismatch.
 - `TestFramework.Abstractions` and `TestFramework.Plugin.Abstractions.UI` are shared with the host
   rather than loaded per plugin, so plugins must build against the host's versions of those two
-  assemblies. Every other dependency is resolved inside the plugin's own context.
+  assemblies. Every other dependency is resolved inside the plugin's own context - except that a
+  dependency which is itself a file in the plugin directory is loaded once for the whole process,
+  through the same catalog the directory scan uses. A settings-editor assembly depends on the step
+  assembly it edits; a private copy of that step assembly would give its settings types a second
+  identity, and the editor's cast of the settings object the step plugin created would fail.
 - Loading failures are isolated per assembly and per type: one broken plugin type does not discard
   the other plugins in the same assembly, and partially loadable assemblies contribute the types
   that did load. Failures are reported in the load report rather than thrown.

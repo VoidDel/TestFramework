@@ -44,7 +44,10 @@ internal sealed class PluginAssemblyLoadContext : AssemblyLoadContext
             }
         }
 
-        return assemblyPath is null ? null : LoadFromAssemblyPath(assemblyPath);
+        // Not LoadFromAssemblyPath: that would load a private copy into this context even when
+        // the same file is (or will be) loaded as a plugin of its own, and two copies of one file
+        // are two sets of types. See PluginAssemblyCatalog.LoadShared.
+        return assemblyPath is null ? null : PluginAssemblyCatalog.LoadShared(assemblyPath);
     }
 
     protected override nint LoadUnmanagedDll(string unmanagedDllName)

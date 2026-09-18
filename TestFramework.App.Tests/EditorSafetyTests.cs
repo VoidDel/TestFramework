@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using TestFramework.Abstractions.Models;
@@ -127,7 +128,11 @@ public sealed class EditorSafetyTests
             var step = new TestStepDefinition { PluginId = "basic.limit-check", Parameters = { ["Value"] = "${measurement}" } };
             var editor = new StepEditorWindow(step, plugins, editors, new Dictionary<string, object?>());
             editor.Show();
-            Assert.NotNull(editor.FindControl<ContentControl>("PluginSettingsContent")!.Content);
+            // The editor falls back to a TextBlock explaining the failure when the plugin's
+            // editor cannot be built, so "some content" is not enough: a real editor has inputs.
+            var content = Assert.IsAssignableFrom<Control>(editor.FindControl<ContentControl>("PluginSettingsContent")!.Content);
+            Assert.IsNotType<TextBlock>(content);
+            Assert.NotEmpty(content.GetLogicalDescendants().OfType<TextBox>());
             Assert.Equal("${measurement}", step.Parameters["Value"]);
             editor.Close();
             return Task.CompletedTask;

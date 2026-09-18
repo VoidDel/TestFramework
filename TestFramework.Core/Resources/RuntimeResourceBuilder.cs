@@ -32,7 +32,7 @@ public sealed class RuntimeResourceBuilder
                 var plugin = _plugins.GetRequiredInstrumentDriver(definition.DriverId, definition.DriverVersion);
                 resources.RegisterInstrument(
                     definition.Id,
-                    await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
+                    await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
             }
 
             foreach (var definition in sequence.Transports)
@@ -40,7 +40,7 @@ public sealed class RuntimeResourceBuilder
                 var plugin = _plugins.GetRequiredTransport(definition.TransportId, definition.TransportVersion);
                 resources.RegisterTransport(
                     definition.Id,
-                    await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
+                    await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
             }
 
             foreach (var definition in sequence.Services)
@@ -48,7 +48,7 @@ public sealed class RuntimeResourceBuilder
                 var plugin = _plugins.GetRequiredService(definition.ServiceId, definition.ServiceVersion);
                 resources.RegisterService(
                     definition.Id,
-                    await plugin.CreateAsync(definition, resources, cancellationToken).ConfigureAwait(false));
+                    await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
             }
         }
         catch (Exception buildError)

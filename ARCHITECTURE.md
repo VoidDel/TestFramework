@@ -119,7 +119,10 @@ reaching for its transport - so the scope exposes `Instruments`, `Transports` an
 lookup. It deliberately exposes nothing else: registering and disposing belong to the host, which
 owns the container shared by every resource in the run. The concrete container,
 `RuntimeResourceProvider`, lives in `TestFramework.Core` rather than beside the contracts, so the
-contract package cannot hand a plugin something it is not meant to mutate.
+contract package cannot hand a plugin something it is not meant to mutate. Plugins never receive
+the container itself either - it is also the disposable owner of every resource, and a cast to
+`IDisposable` would let one plugin release the others' resources. Resource plugins and step
+contexts get `ReadOnlyResourceScope`, which implements the lookup interfaces and nothing else.
 
 **Trust boundary:** plugin assemblies are loaded without signature or hash verification, and plugin
 code runs in-process with full host privileges. Write access to the plugin directory is therefore

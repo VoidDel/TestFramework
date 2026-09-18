@@ -325,9 +325,9 @@ public sealed class TestSequenceRunner
                 Variables = new Dictionary<string, object?>(variables, StringComparer.OrdinalIgnoreCase),
                 ResolvedParameters = resolvedParameters,
                 PreviousStepResults = previousStepResults,
-                Instruments = _resources,
-                Transports = _resources,
-                Services = _resources,
+                Instruments = _resources.Scope,
+                Transports = _resources.Scope,
+                Services = _resources.Scope,
                 Log = message => _observer.Log($"[{item.Name}/{step.Name}] {message}")
             };
 

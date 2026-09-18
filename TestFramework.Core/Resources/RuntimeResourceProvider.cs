@@ -23,6 +23,14 @@ public sealed class RuntimeResourceProvider :
 
     public ITestServiceProvider Services => this;
 
+    /// <summary>
+    /// What plugin code is given instead of this object. This provider is also the disposable
+    /// container, and a plugin holding it could release the run's resources through a cast; the
+    /// scope forwards lookups only.
+    /// </summary>
+    public ReadOnlyResourceScope Scope => _scope ??= new ReadOnlyResourceScope(this);
+
+    private ReadOnlyResourceScope? _scope;
     private readonly bool _isReadOnly;
     private readonly Dictionary<string, object> _instruments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, object> _transports = new(StringComparer.OrdinalIgnoreCase);

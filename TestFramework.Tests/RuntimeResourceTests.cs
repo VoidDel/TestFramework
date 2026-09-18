@@ -71,6 +71,106 @@ public sealed class RuntimeResourceTests
         Assert.Equal("transport-over:dmm-instrument", transport);
     }
 
+    [Fact]
+    public async Task BuildAsync_ScopeHandedToPluginsCannotDisposeTheContainer()
+    {
+        // The contract is read-only, but the container behind it is disposable. A plugin must not
+        // be able to reach that through a cast, or one plugin could release every other's resource.
+        var registry = new ResourcePluginRegistry();
+        registry.RegisterInstrumentDriver(new NamedInstrumentPlugin());
+        registry.RegisterTransport(new ScopeCapturingTransportPlugin());
+
+        var sequence = new TestSequence
+        {
+            Instruments = [new InstrumentDefinition { Id = "dmm", DriverId = "demo.instrument", DriverVersion = "1.0.0" }],
+            Transports = [new TransportDefinition { Id = "bus", TransportId = "demo.capture", TransportVersion = "1.0.0" }]
+        };
+
+        await using var resources = await new RuntimeResourceBuilder(registry).BuildAsync(sequence);
+
+        var scope = Assert.IsType<IResourceScope>(ScopeCapturingTransportPlugin.LastScope, exactMatch: false);
+        Assert.NotSame(resources, scope);
+        Assert.IsNotAssignableFrom<IDisposable>(scope);
+        Assert.IsNotAssignableFrom<IAsyncDisposable>(scope);
+        Assert.IsNotAssignableFrom<IDisposable>(scope.Instruments);
+        Assert.Equal("dmm-instrument", scope.Instruments.GetRequired<string>("dmm"));
+    }
+
+    [Fact]
+    public async Task RunAsync_ProvidersHandedToStepsCannotDisposeTheContainer()
+    {
+        var registry = new PluginRegistry();
+        var plugin = new ProviderCapturingStepPlugin();
+        registry.Register(plugin);
+        var resources = new RuntimeResourceProvider();
+        resources.RegisterService("svc", "service");
+        var sequence = new TestSequence
+        {
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    MainSteps = [new TestStepDefinition { Id = "capture", Name = "Capture", PluginId = "test.capture", PluginVersion = "1.0.0" }],
+                    VerdictSource = new VerdictSource { StepId = "capture" }
+                }
+            ]
+        };
+
+        await new TestSequenceRunner(registry, resources: resources).RunAsync(sequence);
+
+        Assert.NotNull(plugin.Services);
+        Assert.IsNotAssignableFrom<IDisposable>(plugin.Services);
+        Assert.IsNotAssignableFrom<IAsyncDisposable>(plugin.Services);
+        Assert.Equal("service", plugin.Services!.GetRequired<string>("svc"));
+    }
+
+    private sealed class ScopeCapturingTransportPlugin : ITransportPlugin
+    {
+        public static IResourceScope? LastScope { get; private set; }
+
+        public ResourcePluginDescriptor Descriptor { get; } = new()
+        {
+            PluginId = "demo.capture",
+            DisplayName = "demo.capture",
+            Version = new Version(1, 0, 0)
+        };
+
+        public Type TransportType => typeof(string);
+
+        public Task<object> CreateAsync(TransportDefinition definition, IResourceScope resources, CancellationToken cancellationToken)
+        {
+            LastScope = resources;
+            return Task.FromResult<object>("captured");
+        }
+    }
+
+    private sealed class ProviderCapturingStepPlugin : ITestStepPlugin
+    {
+        public ITestServiceProvider? Services { get; private set; }
+
+        public TestStepPluginDescriptor Descriptor { get; } = new()
+        {
+            PluginId = "test.capture",
+            DisplayName = "Capture",
+            Version = new Version(1, 0, 0)
+        };
+
+        public Type SettingsType => typeof(object);
+
+        public object CreateDefaultSettings() => new();
+
+        public object LoadSettings(IReadOnlyDictionary<string, object?> parameters) => new();
+
+        public IReadOnlyDictionary<string, object?> SaveSettings(object settings) => new Dictionary<string, object?>();
+
+        public Task<TestStepResult> ExecuteAsync(TestStepExecutionContext context, object settings, CancellationToken cancellationToken)
+        {
+            Services = context.Services;
+            return Task.FromResult(new TestStepResult { Verdict = TestVerdict.Pass });
+        }
+    }
+
     private sealed class NamedInstrumentPlugin : IInstrumentDriverPlugin
     {
         public ResourcePluginDescriptor Descriptor { get; } = new()

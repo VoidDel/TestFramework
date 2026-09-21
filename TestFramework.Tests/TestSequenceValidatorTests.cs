@@ -597,6 +597,62 @@ public sealed class TestSequenceValidatorTests
         Assert.DoesNotContain(issues, issue => issue.Path.Contains("parameters", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Validate_RequirementTheStationDoesNotBind_IsReportedBeforeTheRun()
+    {
+        var sequence = new TestSequence
+        {
+            Name = "Sequence",
+            Requires = [new ResourceRequirement { Alias = "psu", Description = "程控电源" }],
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    MainSteps = [new TestStepDefinition { Id = "main", Name = "Main", PluginId = "demo.step" }],
+                    VerdictSource = new VerdictSource { StepId = "main" }
+                }
+            ]
+        };
+
+        var station = new StationConfiguration { StationId = "line-1", Name = "工位 1" };
+        var issues = new TestSequenceValidator(station: station).Validate(sequence);
+
+        // Without this the operator learns the bench has no supply once a DUT is already connected.
+        var issue = Assert.Single(issues, candidate => candidate.Path.StartsWith("requires", StringComparison.Ordinal));
+        Assert.Contains("工位 1", issue.Message, StringComparison.Ordinal);
+        Assert.Contains("psu", issue.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_RequirementBoundByTheStation_IsAccepted()
+    {
+        var sequence = new TestSequence
+        {
+            Name = "Sequence",
+            Requires = [new ResourceRequirement { Alias = "psu" }],
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    MainSteps = [new TestStepDefinition { Id = "main", Name = "Main", PluginId = "demo.step" }],
+                    VerdictSource = new VerdictSource { StepId = "main" }
+                }
+            ]
+        };
+
+        var station = new StationConfiguration
+        {
+            StationId = "line-1",
+            Resources = [new StationResourceBinding { Alias = "psu", DriverId = "demo.psu", Resource = "COM7" }]
+        };
+
+        var issues = new TestSequenceValidator(station: station).Validate(sequence);
+
+        Assert.DoesNotContain(issues, issue => issue.Path.StartsWith("requires", StringComparison.Ordinal));
+    }
+
     private sealed class StubPlugin : ITestStepPlugin
     {
         public StubPlugin(string pluginId, Version version, params StepParameterDescriptor[] parameters)

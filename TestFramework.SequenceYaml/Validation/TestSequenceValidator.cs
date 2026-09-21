@@ -8,13 +8,16 @@ public sealed class TestSequenceValidator
 {
     private readonly IPluginRegistry? _pluginRegistry;
     private readonly IResourcePluginCatalog? _resourcePlugins;
+    private readonly StationConfiguration? _station;
 
     public TestSequenceValidator(
         IPluginRegistry? pluginRegistry = null,
-        IResourcePluginCatalog? resourcePlugins = null)
+        IResourcePluginCatalog? resourcePlugins = null,
+        StationConfiguration? station = null)
     {
         _pluginRegistry = pluginRegistry;
         _resourcePlugins = resourcePlugins;
+        _station = station;
     }
 
     public IReadOnlyList<ValidationIssue> Validate(TestSequence sequence)
@@ -31,6 +34,7 @@ public sealed class TestSequenceValidator
             issues.Add(new ValidationIssue { Path = "name", Message = "Sequence name is required." });
         }
 
+        ValidateRequirements(sequence.Requires, issues);
         ValidateInstruments(sequence.Instruments, issues);
         ValidateTransports(sequence.Transports, sequence.Instruments, issues);
         ValidateServices(sequence.Services, sequence.Transports, issues);
@@ -134,6 +138,90 @@ public sealed class TestSequenceValidator
             string.IsNullOrEmpty(source.ExpectedString))
         {
             issues.Add(new ValidationIssue { Path = $"{path}.expectedString", Message = "String verdict requires expectedString." });
+        }
+    }
+
+    /// <summary>
+    /// Checks that every resource the sequence requires is bound on the configured station, and
+    /// that whatever the station binds it to is a driver that exists.
+    ///
+    /// Binding failures belong here rather than in the runner: "this station has no supply on psu"
+    /// is knowable the moment the sequence is opened, and finding it out mid-run means finding it
+    /// out with a DUT already connected.
+    ///
+    /// With no station configured the binding check is skipped, because an editor validating a
+    /// sequence it is about to send elsewhere cannot answer it - but the requirements themselves
+    /// are still checked for being well-formed.
+    /// </summary>
+    private void ValidateRequirements(
+        IReadOnlyList<ResourceRequirement> requirements,
+        ICollection<ValidationIssue> issues)
+    {
+        if (requirements.Count == 0)
+        {
+            return;
+        }
+
+        var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < requirements.Count; index++)
+        {
+            var requirement = requirements[index];
+            var path = $"requires[{index}]";
+
+            if (!Enum.IsDefined(requirement.Kind))
+            {
+                issues.Add(new ValidationIssue { Path = $"{path}.kind", Message = $"Unknown resource kind '{(int)requirement.Kind}'." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(requirement.Alias))
+            {
+                paths.TryAdd(requirement.Alias, path);
+            }
+        }
+
+        // With a station configured, an alias it does not bind means this sequence cannot run here:
+        // an error. With no station configured at all the host simply cannot answer the question -
+        // an editor preparing a sequence for another bench is the ordinary case - so the same
+        // finding is a warning, and the sequence is not refused over the host's own configuration.
+        var severity = _station is null ? ValidationSeverity.Warning : ValidationSeverity.Error;
+
+        foreach (var problem in StationBinding.Check(requirements, _station))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = paths.TryGetValue(problem.Alias, out var path) ? $"{path}.alias" : "requires",
+                Severity = string.IsNullOrWhiteSpace(problem.Alias) ? ValidationSeverity.Error : severity,
+                Message = problem.Message
+            });
+        }
+
+        ValidateStationDrivers(requirements, issues, paths);
+    }
+
+    /// <summary>
+    /// The station may bind an alias to a driver that is not installed on this host, which binding
+    /// alone cannot see - it compares the sequence to the configuration, not to the plugin set.
+    /// </summary>
+    private void ValidateStationDrivers(
+        IReadOnlyList<ResourceRequirement> requirements,
+        ICollection<ValidationIssue> issues,
+        IReadOnlyDictionary<string, string> paths)
+    {
+        if (_resourcePlugins is null || _station is null)
+        {
+            return;
+        }
+
+        foreach (var requirement in requirements)
+        {
+            var binding = _station.Find(requirement.Alias);
+            if (binding is null || string.IsNullOrWhiteSpace(binding.DriverId) || binding.Kind != requirement.Kind)
+            {
+                continue;
+            }
+
+            var path = paths.TryGetValue(requirement.Alias, out var found) ? $"{found}.alias" : "requires";
+            ValidateResourcePlugin(binding.Kind, binding.DriverId, binding.DriverVersion, path, issues);
         }
     }
 

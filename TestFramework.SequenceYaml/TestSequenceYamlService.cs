@@ -1,4 +1,5 @@
 using TestFramework.Abstractions.Models;
+using TestFramework.Abstractions.Resources;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Tokens;
 using YamlDotNet.Serialization;
@@ -150,6 +151,8 @@ public sealed class TestSequenceYamlService
 
         public Dictionary<string, object?> Variables { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+        public List<YamlResourceRequirement> Requires { get; set; } = [];
+
         public List<YamlInstrument> Instruments { get; set; } = [];
 
         public List<YamlTransport> Transports { get; set; } = [];
@@ -166,6 +169,7 @@ public sealed class TestSequenceYamlService
                 Id = Id,
                 Name = Name,
                 Variables = NormalizeDictionary(Variables),
+                Requires = Requires.Select(requirement => requirement.ToDomain()).ToList(),
                 Instruments = Instruments.Select(instrument => instrument.ToDomain()).ToList(),
                 Transports = Transports.Select(transport => transport.ToDomain()).ToList(),
                 Services = Services.Select(service => service.ToDomain()).ToList(),
@@ -181,10 +185,48 @@ public sealed class TestSequenceYamlService
                 Id = sequence.Id,
                 Name = sequence.Name,
                 Variables = sequence.Variables,
+                Requires = sequence.Requires.Select(YamlResourceRequirement.FromDomain).ToList(),
                 Instruments = sequence.Instruments.Select(YamlInstrument.FromDomain).ToList(),
                 Transports = sequence.Transports.Select(YamlTransport.FromDomain).ToList(),
                 Services = sequence.Services.Select(YamlTestService.FromDomain).ToList(),
                 Items = sequence.Items.Select(YamlTestItem.FromDomain).ToList()
+            };
+        }
+    }
+
+    private sealed class YamlResourceRequirement
+    {
+        public string Alias { get; set; } = string.Empty;
+
+        public ResourcePluginKind Kind { get; set; } = ResourcePluginKind.InstrumentDriver;
+
+        public string? DriverId { get; set; }
+
+        public string? MinimumDriverVersion { get; set; }
+
+        public string? Description { get; set; }
+
+        public ResourceRequirement ToDomain()
+        {
+            return new ResourceRequirement
+            {
+                Alias = Alias,
+                Kind = Kind,
+                DriverId = DriverId,
+                MinimumDriverVersion = MinimumDriverVersion,
+                Description = Description
+            };
+        }
+
+        public static YamlResourceRequirement FromDomain(ResourceRequirement requirement)
+        {
+            return new YamlResourceRequirement
+            {
+                Alias = requirement.Alias,
+                Kind = requirement.Kind,
+                DriverId = requirement.DriverId,
+                MinimumDriverVersion = requirement.MinimumDriverVersion,
+                Description = requirement.Description
             };
         }
     }

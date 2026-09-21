@@ -109,6 +109,21 @@ public sealed class MyStepPlugin : ITestStepPlugin
 
     public Type SettingsType => typeof(MyStepSettings);
 
+    // 声明参数：校验器据此在运行前检查取值，宿主据此生成配置界面。
+    public IReadOnlyList<StepParameterDescriptor> Parameters { get; } =
+    [
+        new StepParameterDescriptor
+        {
+            Name = nameof(MyStepSettings.TimeoutMs),
+            Kind = StepParameterKind.Integer,
+            DisplayName = "超时",
+            Description = "等待设备响应的毫秒数。",
+            DefaultValue = 1000,
+            Minimum = 1,
+            Maximum = 60000
+        }
+    ];
+
     public object CreateDefaultSettings() => new MyStepSettings();
 
     public object LoadSettings(IReadOnlyDictionary<string, object?> parameters) => /* 从参数字典构造 */;
@@ -132,7 +147,23 @@ public sealed class MyStepPlugin : ITestStepPlugin
 - 参数值带着 YAML 标量类型到达：文件里未加引号的 `5.0` 是 double、`7` 是 int、`true` 是 bool，加引号的是字符串；保存时会给形似数字或布尔的字符串加引号，类型经往返不变。`LoadSettings` 应同时接受数字与字符串两种形式（内置的 `SettingsMap` 即如此），手写文件或文本输入都可能给出字符串。
 - 输出写入 `TestStepResult.Outputs`，序列通过 `verdictSource.outputKey` 取用。
 
+### 声明参数
+
+`Parameters` 是**带默认实现**的成员：不实现就返回空，行为与没有这个成员时完全一致——校验器不碰该插件的参数，宿主回退到裸键值列表。老插件因此无需改动，契约仍是 1.x。
+
+声明之后有两个收益：
+
+- **运行前校验。** `TestSequenceValidator` 按声明检查取值：类型不符、超出范围、不在枚举内、必填缺失，都在编辑阶段报错，而不是跑到一半才在设备已接 DUT 的情况下失败。未声明的多余键报为警告（可能是笔误，也可能是新版插件才读的键），不拒绝序列。
+- **自动生成界面。** 宿主按声明生成表单，只有确实需要定制控件的参数才值得再写一个设置界面插件。
+
+`Kind` 只有 `String`/`Integer`/`Number`/`Boolean`/`Enum` 五种，刻意保持得小：这是宿主能逐项渲染、校验器能不靠反射检查、并且将来能跨进程传递的集合。参数形状超出这个范围的插件，继续自带设置界面即可。
+
+`AllowVariableReference` 默认为 `true`。参数值写成 `${name}` 时，实际取值要到运行时才知道，因此类型与范围检查对该参数暂停，改为检查变量本身是否已定义；必须在运行前确定的参数把它设为 `false`。
+
 ## 5. 实现设置界面
+
+> 先看上一节：声明了参数就已经有一套可用表单，这一节只针对确实需要定制控件的情况。
+
 
 ```csharp
 public sealed class MyStepEditorPlugin : IStepSettingsEditorPlugin
@@ -168,7 +199,7 @@ Plugins/
     AnotherPlugin.dll
 ```
 
-- 每个插件建议独占一个子目录，其依赖放在同级。子目录名会成为插件选择器里的分组名。
+- 每个插件建议独占一个子目录，其依赖放在同级。插件在 `Descriptor.Category` 里声明分组则按声明分组（`/` 分层，如 `电池/充电`）；不声明（留空）才回退到子目录名。
 - 原生 DLL 和不含插件类型的程序集会被静默跳过，不会报错。
 - 每个程序集加载到独立的可回收 `AssemblyLoadContext`，插件之间的依赖版本互不冲突。
 - `TestFramework.Abstractions`、`TestFramework.Plugin.Abstractions.UI` 以及全部 `Avalonia.*` 程序集由宿主共享：即使它们随 `dotnet publish` 一起出现在插件目录里，也会被忽略并解析到宿主的版本。插件必须针对宿主提供的这些版本编译。共享 Avalonia 不是可选项——设置界面契约的 `CreateEditor` 返回 Avalonia 的 `Control`，插件私有的另一份 Avalonia 会让这个类型身份不一致，整个程序集报"没有实现"而无法加载。
@@ -177,6 +208,8 @@ Plugins/
 ## 7. 生命周期限制
 
 - 插件程序集加载后**无法卸载**。更新插件 DLL 必须重启宿主，运行期间文件处于占用状态。
+- **资源插件可能跨多次运行存活。** 工位配置里标记为 `shared`（默认）的资源由 `StationResourceHost` 在宿主启动时建立、关闭时释放，中间连续测多个 DUT 都是同一个实例。驱动因此必须能被反复使用而不残留上一个 DUT 的状态；确实做不到的，在工位配置里把该项设为 `shared: false`，它就恢复为每次运行重建。
+- 一次运行以 `Error` 结束后，工位共享资源会被标记为待重建，下一次运行前重新打开。
 - 插件代码以宿主权限在同一进程内运行，加载不做签名或哈希校验。对插件目录的写权限等同于以当前用户身份执行代码。只读的资源契约防的是误用，不是沙箱。
 
 ## 8. 本地调试

@@ -41,10 +41,30 @@ Each test sequence contains test items. Each item has three step sections:
 
 A step plugin implements `ITestStepPlugin`:
 
+- `Parameters` — optional, declares what the step takes.
 - `CreateDefaultSettings()`
 - `LoadSettings(...)`
 - `SaveSettings(...)`
 - `ExecuteAsync(...)`
+
+### Declared Parameters
+
+`Parameters` returns a `StepParameterDescriptor` per parameter: name, kind, default, range or
+choices, whether it is required, and whether a `${variable}` may stand in for it. It has a default
+implementation returning nothing, so plugins written before it existed keep working unchanged and
+the contract stays 1.x.
+
+Declaring parameters buys two things. `TestSequenceValidator` checks the step's values against the
+declaration before a run starts, so a wrong type or an out-of-range number is reported while the
+sequence is being edited instead of part-way through a run with a DUT connected. And a host can
+build the settings form from the declaration, so a plugin only ships a settings editor when its
+parameters genuinely need a custom control.
+
+A plugin that declares nothing is left entirely alone: the validator does not check its parameters
+and a host falls back to a raw key/value list, exactly as before.
+
+`StepParameterCheck` implements the value rules once and is used by both the validator and the
+host's generated form, so a value a form accepts cannot be one the validator later refuses.
 
 Runtime step plugins should not depend on Avalonia: a headless or CI host loads them to execute
 sequences and has no UI to show. A settings editor is therefore a separate plugin kind,
@@ -202,3 +222,40 @@ The sequence can declare:
 Step code accesses these through `TestStepExecutionContext.Instruments`, `Transports`, and `Services`. For example, a UDS
 step should ask for an `IUdsClient` service alias instead of directly using a Vector or PEAK CAN driver. This keeps the
 step stable when the underlying hardware vendor or protocol implementation changes.
+
+## Stations and Resource Scopes
+
+A sequence declaring `instruments` inline carries its addresses with it, which pins it to one
+bench: five stations with different ports need five copies of the sequence, or the station's wiring
+pasted into each one.
+
+`requires` is the alternative. A sequence declares what it needs — an alias, a resource kind, and
+optionally a driver or minimum version — and the station says what is behind each alias:
+
+- `TestSequence.Requires` — `ResourceRequirement`: "this test needs a supply I call `psu`".
+- `StationConfiguration` — `StationResourceBinding`: "on this bench `psu` is a Keysight on COM7".
+
+`StationBinding.Check` matches the two, and is used by both `TestSequenceValidator` and the runtime,
+so "this sequence can run here" means the same thing before a run and during one. A bench that does
+not bind a required alias is an error at validation; with no station configured at all it is a
+warning, because a host cannot answer the question for a bench it is not.
+
+### Scopes
+
+`StationResourceHost` owns two nested scopes:
+
+- The **station scope** opens bindings marked `shared` (the default) once and keeps them open across
+  runs. Opening a USB-CAN adapter per DUT costs about a second each time, some instruments need to
+  warm up, and some drivers fail when cycled.
+- The **run scope** nests inside it, holding the sequence's own inline resources and any binding
+  marked `shared: false`. It is released when the run ends; the station's resources are not. A
+  lookup that misses in the run scope falls through to the station scope, so a step asks for `psu`
+  without knowing which scope opened it. A run resource shadows a station resource of the same
+  alias.
+
+After a run that ends in `TestVerdict.Error` the host marks the station scope stale and the next run
+reopens it. A `Fail` — a limit check that came out low — says nothing about the hardware and costs
+no reconnection, but anything that threw left a step part-way through, possibly mid-transaction on
+an instrument, and the next DUT must not inherit that. Nothing is torn down at the moment of the
+fault: the operator may still be looking at it, so the rebuild happens at the start of the next run
+where it is expected and can be reported.

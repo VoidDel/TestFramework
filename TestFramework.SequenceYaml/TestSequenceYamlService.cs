@@ -472,12 +472,25 @@ public sealed class TestSequenceYamlService
         };
     }
 
+    /// <summary>
+    /// Normalizes one of the file's top-level key/value blocks - <c>variables</c>, <c>parameters</c>
+    /// or an instrument's <c>settings</c>. These are the framework's own namespaces and are read
+    /// case-insensitively, so two keys differing only in case are genuinely ambiguous: merging them
+    /// would let file order decide which of the operator's two values survives. Rejected, like
+    /// every other way this file could be read differently from how it was written.
+    /// </summary>
     private static Dictionary<string, object?> NormalizeDictionary(IDictionary<string, object?>? source)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         if (source is null)
         {
             return result;
+        }
+
+        if (VariableValue.TryFindCaseInsensitiveCollision(source.Keys, out var collision))
+        {
+            throw new InvalidDataException(
+                $"Key '{collision}' differs from an earlier key only by case. Variables, parameters and settings are matched case-insensitively, so the two cannot both be kept.");
         }
 
         foreach (var (key, value) in source)
@@ -488,16 +501,34 @@ public sealed class TestSequenceYamlService
         return result;
     }
 
+    /// <summary>
+    /// A value inside one of those blocks. Dictionaries nested here are the plugin's own data, not
+    /// a framework namespace, so they stay case-sensitive - see <see cref="VariableValue"/>. Making
+    /// them case-insensitive turned a payload carrying both <c>SOC</c> and <c>soc</c> into an
+    /// unhandled <see cref="ArgumentException"/> at load.
+    /// </summary>
     private static object? NormalizeValue(object? value)
     {
         if (value is IDictionary<object, object?> objectDictionary)
         {
-            return objectDictionary.ToDictionary(pair => Convert.ToString(pair.Key) ?? string.Empty, pair => NormalizeValue(pair.Value), StringComparer.OrdinalIgnoreCase);
+            var nested = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var (key, item) in objectDictionary)
+            {
+                nested[Convert.ToString(key) ?? string.Empty] = NormalizeValue(item);
+            }
+
+            return nested;
         }
 
         if (value is IDictionary<string, object?> stringDictionary)
         {
-            return NormalizeDictionary(stringDictionary);
+            var nested = new Dictionary<string, object?>(VariableValue.ComparerOf(stringDictionary));
+            foreach (var (key, item) in stringDictionary)
+            {
+                nested[key] = NormalizeValue(item);
+            }
+
+            return nested;
         }
 
         if (value is IEnumerable<object?> list && value is not string)

@@ -56,7 +56,14 @@ public sealed class TestStepDefinition
 
         if (value is IDictionary dictionary)
         {
-            var clone = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            // Case-sensitive: a dictionary inside a parameter value is the plugin's data, and
+            // duplicating a step must not quietly drop one of two keys that differ only by case.
+            // See VariableValue.
+            var comparer = dictionary is IDictionary<string, object?> typed
+                ? VariableValue.ComparerOf(typed)
+                : StringComparer.Ordinal;
+
+            var clone = new Dictionary<string, object?>(comparer);
             foreach (DictionaryEntry entry in dictionary)
             {
                 clone[Convert.ToString(entry.Key) ?? string.Empty] = CloneValue(entry.Value);

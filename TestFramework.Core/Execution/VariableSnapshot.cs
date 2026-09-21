@@ -1,3 +1,5 @@
+using TestFramework.Abstractions.Models;
+
 namespace TestFramework.Core.Execution;
 
 /// <summary>
@@ -14,6 +16,7 @@ internal static class VariableSnapshot
     /// </summary>
     public static Dictionary<string, object?> Capture(IEnumerable<KeyValuePair<string, object?>> variables)
     {
+        // The variable table is the framework's own namespace and is case-insensitive by design.
         var snapshot = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, value) in variables)
         {
@@ -34,12 +37,27 @@ internal static class VariableSnapshot
         return value switch
         {
             string => value,
-            IDictionary<string, object?> dictionary => dictionary.ToDictionary(
-                pair => pair.Key,
-                pair => CaptureValue(pair.Value, depth + 1),
-                StringComparer.OrdinalIgnoreCase),
+            IDictionary<string, object?> dictionary => CaptureDictionary(dictionary, depth),
             IEnumerable<object?> list => list.Select(item => CaptureValue(item, depth + 1)).ToList(),
             _ => value
         };
+    }
+
+    /// <summary>
+    /// Copies a dictionary held inside a variable, keeping the key comparer it arrived with - see
+    /// <see cref="VariableValue"/>. Forcing case-insensitivity here made a plugin's <c>SOC</c> and
+    /// <c>soc</c> collide, and the copy threw rather than merged: an <see cref="ArgumentException"/>
+    /// out of the runner that lost the entire run result, raised from a finally block where it
+    /// could also replace an in-flight cancellation.
+    /// </summary>
+    private static Dictionary<string, object?> CaptureDictionary(IDictionary<string, object?> source, int depth)
+    {
+        var copy = new Dictionary<string, object?>(VariableValue.ComparerOf(source));
+        foreach (var (key, value) in source)
+        {
+            copy[key] = CaptureValue(value, depth + 1);
+        }
+
+        return copy;
     }
 }

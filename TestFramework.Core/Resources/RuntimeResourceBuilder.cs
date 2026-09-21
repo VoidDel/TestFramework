@@ -31,14 +31,7 @@ public sealed class RuntimeResourceBuilder
         }
         catch (Exception buildError)
         {
-            try
-            {
-                await resources.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception cleanupError)
-            {
-                throw new AggregateException("Resource initialization and cleanup failed.", buildError, cleanupError);
-            }
+            await ResourceScopeCleanup.DisposeAfterFailureAsync(resources, buildError).ConfigureAwait(false);
             throw;
         }
 

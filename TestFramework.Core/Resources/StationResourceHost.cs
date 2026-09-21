@@ -98,9 +98,9 @@ public sealed class StationResourceHost : IAsyncDisposable
                     UnsharedBindingsFor(sequence),
                     cancellationToken).ConfigureAwait(false);
             }
-            catch
+            catch (Exception buildError)
             {
-                await run.DisposeAsync().ConfigureAwait(false);
+                await ResourceScopeCleanup.DisposeAfterFailureAsync(run, buildError).ConfigureAwait(false);
                 throw;
             }
 
@@ -160,9 +160,9 @@ public sealed class StationResourceHost : IAsyncDisposable
                 _station.Resources.Where(binding => binding.Shared),
                 cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception buildError)
         {
-            await session.DisposeAsync().ConfigureAwait(false);
+            await ResourceScopeCleanup.DisposeAfterFailureAsync(session, buildError).ConfigureAwait(false);
             throw;
         }
 

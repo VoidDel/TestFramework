@@ -34,12 +34,15 @@ public sealed class TestSequenceValidator
         ValidateInstruments(sequence.Instruments, issues);
         ValidateTransports(sequence.Transports, sequence.Instruments, issues);
         ValidateServices(sequence.Services, sequence.Transports, issues);
-        ValidateItems(sequence.Items, issues);
+        ValidateItems(sequence.Items, sequence.Variables.Keys, issues);
 
         return issues;
     }
 
-    private void ValidateItems(IReadOnlyList<TestItemDefinition> items, ICollection<ValidationIssue> issues)
+    private void ValidateItems(
+        IReadOnlyList<TestItemDefinition> items,
+        IReadOnlyCollection<string> variableNames,
+        ICollection<ValidationIssue> issues)
     {
         var itemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
@@ -71,9 +74,9 @@ public sealed class TestSequenceValidator
             ValidateVerdictSource(item.VerdictSource, $"{itemPath}.verdictSource", issues);
 
             var stepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, issues);
-            ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, issues);
-            ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, issues);
+            ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, variableNames, issues);
+            ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, variableNames, issues);
+            ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, variableNames, issues);
         }
     }
 
@@ -272,6 +275,7 @@ public sealed class TestSequenceValidator
         IReadOnlyList<TestStepDefinition> steps,
         string path,
         ISet<string> stepIds,
+        IReadOnlyCollection<string> variableNames,
         ICollection<ValidationIssue> issues)
     {
         for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
@@ -301,18 +305,75 @@ public sealed class TestSequenceValidator
                 {
                     issues.Add(new ValidationIssue { Path = $"{stepPath}.pluginId", Message = _pluginRegistry.DescribeMissing(step.PluginId, step.PluginVersion) });
                 }
-                else if (resolution.IsSubstituted)
+                else
                 {
-                    issues.Add(new ValidationIssue
+                    if (resolution.IsSubstituted)
                     {
-                        Path = $"{stepPath}.pluginVersion",
-                        Severity = ValidationSeverity.Warning,
-                        Message = $"Test step plugin '{step.PluginId}' version '{step.PluginVersion}' is not installed; version '{resolution.ResolvedVersion}' will run instead."
-                    });
+                        issues.Add(new ValidationIssue
+                        {
+                            Path = $"{stepPath}.pluginVersion",
+                            Severity = ValidationSeverity.Warning,
+                            Message = $"Test step plugin '{step.PluginId}' version '{step.PluginVersion}' is not installed; version '{resolution.ResolvedVersion}' will run instead."
+                        });
+                    }
+
+                    // Against the version that will actually run, not the one the file asks for:
+                    // a substituted 1.2 may declare a parameter the pinned 1.0 did not.
+                    ValidateParameters(resolution.Plugin, step, stepPath, variableNames, issues);
                 }
             }
 
             ValidateVariableWrites(step.VariableWrites, $"{stepPath}.variableWrites", issues);
+        }
+    }
+
+    /// <summary>
+    /// Checks the step's parameter values against what its plugin declares.
+    ///
+    /// This is the point of declaring parameters at all: without it a wrong type or an out-of-range
+    /// value passes validation, is saved, is reviewed, and fails part-way through a run - after the
+    /// steps before it have already touched the DUT.
+    ///
+    /// A plugin that declares nothing is left alone, so this cannot make a previously valid sequence
+    /// invalid; a plugin whose declaration throws is treated the same way, because a broken
+    /// declaration is the plugin's bug and must not make the operator's sequence unusable.
+    /// </summary>
+    private static void ValidateParameters(
+        ITestStepPlugin plugin,
+        TestStepDefinition step,
+        string stepPath,
+        IReadOnlyCollection<string> variableNames,
+        ICollection<ValidationIssue> issues)
+    {
+        IReadOnlyList<StepParameterDescriptor> declared;
+        try
+        {
+            declared = plugin.Parameters;
+        }
+        catch (Exception ex)
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{stepPath}.pluginId",
+                Severity = ValidationSeverity.Warning,
+                Message = $"Test step plugin '{step.PluginId}' failed to describe its parameters: {ex.Message}"
+            });
+            return;
+        }
+
+        if (declared.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var problem in StepParameterCheck.Check(declared, step.Parameters, variableNames))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{stepPath}.parameters.{problem.ParameterName}",
+                Severity = problem.IsWarning ? ValidationSeverity.Warning : ValidationSeverity.Error,
+                Message = problem.Message
+            });
         }
     }
 

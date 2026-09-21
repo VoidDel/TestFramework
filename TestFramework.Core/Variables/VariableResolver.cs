@@ -1,9 +1,9 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
+using TestFramework.Abstractions.Models;
 
 namespace TestFramework.Core.Variables;
 
-public static partial class VariableResolver
+public static class VariableResolver
 {
     public static Dictionary<string, object?> ResolveDictionary(
         IDictionary<string, object?> source,
@@ -35,7 +35,7 @@ public static partial class VariableResolver
 
     private static object? ResolveText(string text, IDictionary<string, object?> variables)
     {
-        var matches = VariablePattern().Matches(text);
+        var matches = VariableReference.Pattern.Matches(text);
         if (matches.Count == 0)
         {
             return text;
@@ -47,7 +47,7 @@ public static partial class VariableResolver
             return GetRequiredVariable(name, variables);
         }
 
-        return VariablePattern().Replace(text, match =>
+        return VariableReference.Pattern.Replace(text, match =>
         {
             var name = match.Groups["name"].Value;
             return Convert.ToString(GetRequiredVariable(name, variables), CultureInfo.InvariantCulture) ?? string.Empty;
@@ -60,7 +60,4 @@ public static partial class VariableResolver
             ? value
             : throw new InvalidOperationException($"Variable '{name}' is not defined.");
     }
-
-    [GeneratedRegex(@"\$\{(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\}")]
-    private static partial Regex VariablePattern();
 }

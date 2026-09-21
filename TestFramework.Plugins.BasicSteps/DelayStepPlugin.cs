@@ -19,6 +19,19 @@ public sealed class DelayStepPlugin : ITestStepPlugin
 
     public Type SettingsType => typeof(DelayStepSettings);
 
+    public IReadOnlyList<StepParameterDescriptor> Parameters { get; } =
+    [
+        new StepParameterDescriptor
+        {
+            Name = nameof(DelayStepSettings.DelayMs),
+            Kind = StepParameterKind.Integer,
+            DisplayName = "延时",
+            Description = "等待的毫秒数。",
+            DefaultValue = 500,
+            Minimum = 0
+        }
+    ];
+
     public object CreateDefaultSettings() => new DelayStepSettings();
 
     public object LoadSettings(IReadOnlyDictionary<string, object?> parameters)

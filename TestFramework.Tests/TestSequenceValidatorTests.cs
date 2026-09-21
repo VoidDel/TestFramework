@@ -416,9 +416,190 @@ public sealed class TestSequenceValidatorTests
             $"{kind} '{pluginId}' is not registered.";
     }
 
+    /// <summary>
+    /// Builds a one-step sequence carrying <paramref name="parameters"/>, so the parameter checks
+    /// below are not buried in sequence scaffolding.
+    /// </summary>
+    private static TestSequence SequenceWithParameters(
+        Dictionary<string, object?> parameters,
+        Dictionary<string, object?>? variables = null)
+    {
+        var step = new TestStepDefinition
+        {
+            Id = "main",
+            Name = "Main",
+            PluginId = "demo.step",
+            PluginVersion = "1.0.0",
+            Parameters = parameters
+        };
+
+        return new TestSequence
+        {
+            Name = "Sequence",
+            Variables = variables ?? [],
+            Items =
+            [
+                new TestItemDefinition
+                {
+                    Name = "Item",
+                    MainSteps = [step],
+                    VerdictSource = new VerdictSource { StepId = step.Id }
+                }
+            ]
+        };
+    }
+
+    private static TestSequenceValidator ValidatorFor(params StepParameterDescriptor[] parameters)
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new StubPlugin("demo.step", new Version(1, 0, 0), parameters));
+        return new TestSequenceValidator(registry);
+    }
+
+    [Fact]
+    public void Validate_ParameterOfTheWrongType_IsReportedBeforeTheRun()
+    {
+        // The whole point of declaring parameters: this used to pass validation, save, and fail
+        // part-way through a run - after earlier steps had already driven the DUT.
+        var issues = ValidatorFor(new StepParameterDescriptor
+            {
+                Name = "DelayMs",
+                Kind = StepParameterKind.Integer
+            })
+            .Validate(SequenceWithParameters(new Dictionary<string, object?> { ["DelayMs"] = "abc" }));
+
+        var issue = Assert.Single(issues, candidate => candidate.Path.Contains("DelayMs", StringComparison.Ordinal));
+        Assert.Equal(ValidationSeverity.Error, issue.Severity);
+        Assert.Contains("whole number", issue.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(20001)]
+    public void Validate_ParameterOutsideItsRange_IsReported(int value)
+    {
+        var issues = ValidatorFor(new StepParameterDescriptor
+            {
+                Name = "DelayMs",
+                Kind = StepParameterKind.Integer,
+                Minimum = 0,
+                Maximum = 20000
+            })
+            .Validate(SequenceWithParameters(new Dictionary<string, object?> { ["DelayMs"] = value }));
+
+        Assert.Contains(issues, issue =>
+            issue.Severity == ValidationSeverity.Error &&
+            issue.Path.Contains("DelayMs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_RequiredParameterMissing_IsReported()
+    {
+        var issues = ValidatorFor(new StepParameterDescriptor
+            {
+                Name = "Port",
+                Kind = StepParameterKind.String,
+                IsRequired = true
+            })
+            .Validate(SequenceWithParameters([]));
+
+        Assert.Contains(issues, issue =>
+            issue.Severity == ValidationSeverity.Error &&
+            issue.Message.Contains("required", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_RequiredParameterWithADefault_IsSatisfiedByTheDefault()
+    {
+        var issues = ValidatorFor(new StepParameterDescriptor
+            {
+                Name = "DelayMs",
+                Kind = StepParameterKind.Integer,
+                IsRequired = true,
+                DefaultValue = 500
+            })
+            .Validate(SequenceWithParameters([]));
+
+        Assert.DoesNotContain(issues, issue => issue.Path.Contains("DelayMs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ValueOutsideTheDeclaredChoices_IsReported()
+    {
+        var issues = ValidatorFor(new StepParameterDescriptor
+            {
+                Name = "Mode",
+                Kind = StepParameterKind.Enum,
+                Choices = [new StepParameterChoice("cc"), new StepParameterChoice("cv")]
+            })
+            .Validate(SequenceWithParameters(new Dictionary<string, object?> { ["Mode"] = "cx" }));
+
+        var issue = Assert.Single(issues, candidate => candidate.Path.Contains("Mode", StringComparison.Ordinal));
+        Assert.Contains("'cc', 'cv'", issue.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_VariableReference_SuspendsTypeCheckingButNotTheVariableItself()
+    {
+        var descriptor = new StepParameterDescriptor { Name = "DelayMs", Kind = StepParameterKind.Integer };
+
+        // A reference to a variable that exists is fine: its value is only known at run time, so the
+        // type cannot be checked here and reporting it would make every real sequence invalid.
+        var defined = ValidatorFor(descriptor).Validate(SequenceWithParameters(
+            new Dictionary<string, object?> { ["DelayMs"] = "${soakMs}" },
+            new Dictionary<string, object?> { ["soakMs"] = 1000 }));
+        Assert.DoesNotContain(defined, issue => issue.Path.Contains("DelayMs", StringComparison.Ordinal));
+
+        // A reference to one that does not exist is a run-time crash waiting to happen.
+        var undefined = ValidatorFor(descriptor).Validate(SequenceWithParameters(
+            new Dictionary<string, object?> { ["DelayMs"] = "${soakMs}" }));
+        Assert.Contains(undefined, issue =>
+            issue.Severity == ValidationSeverity.Error &&
+            issue.Message.Contains("soakMs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ParameterThatForbidsVariables_ReportsAReference()
+    {
+        var issues = ValidatorFor(new StepParameterDescriptor
+            {
+                Name = "Channel",
+                Kind = StepParameterKind.String,
+                AllowVariableReference = false
+            })
+            .Validate(SequenceWithParameters(
+                new Dictionary<string, object?> { ["Channel"] = "${channel}" },
+                new Dictionary<string, object?> { ["channel"] = "can0" }));
+
+        Assert.Contains(issues, issue => issue.Severity == ValidationSeverity.Error);
+    }
+
+    [Fact]
+    public void Validate_UndeclaredParameter_IsAWarningNotAnError()
+    {
+        // Usually a typo, but it may also be a key a newer build of the plugin reads, so it must not
+        // refuse the sequence.
+        var issues = ValidatorFor(new StepParameterDescriptor { Name = "DelayMs", Kind = StepParameterKind.Integer })
+            .Validate(SequenceWithParameters(new Dictionary<string, object?> { ["DelyMs"] = 500 }));
+
+        var issue = Assert.Single(issues, candidate => candidate.Path.Contains("DelyMs", StringComparison.Ordinal));
+        Assert.Equal(ValidationSeverity.Warning, issue.Severity);
+    }
+
+    [Fact]
+    public void Validate_PluginThatDeclaresNoParameters_IsLeftAlone()
+    {
+        // Every plugin built before this member existed lands here. Reporting anything would make
+        // working sequences invalid on upgrade.
+        var issues = ValidatorFor()
+            .Validate(SequenceWithParameters(new Dictionary<string, object?> { ["anything"] = "at all" }));
+
+        Assert.DoesNotContain(issues, issue => issue.Path.Contains("parameters", StringComparison.Ordinal));
+    }
+
     private sealed class StubPlugin : ITestStepPlugin
     {
-        public StubPlugin(string pluginId, Version version)
+        public StubPlugin(string pluginId, Version version, params StepParameterDescriptor[] parameters)
         {
             Descriptor = new TestStepPluginDescriptor
             {
@@ -426,9 +607,12 @@ public sealed class TestSequenceValidatorTests
                 DisplayName = pluginId,
                 Version = version
             };
+            Parameters = parameters;
         }
 
         public TestStepPluginDescriptor Descriptor { get; }
+
+        public IReadOnlyList<StepParameterDescriptor> Parameters { get; }
 
         public Type SettingsType => typeof(object);
 

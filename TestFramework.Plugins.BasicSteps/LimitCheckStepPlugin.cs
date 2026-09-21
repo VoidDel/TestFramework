@@ -19,6 +19,34 @@ public sealed class LimitCheckStepPlugin : ITestStepPlugin
 
     public Type SettingsType => typeof(LimitCheckStepSettings);
 
+    public IReadOnlyList<StepParameterDescriptor> Parameters { get; } =
+    [
+        new StepParameterDescriptor
+        {
+            Name = nameof(LimitCheckStepSettings.Value),
+            Kind = StepParameterKind.Number,
+            DisplayName = "测量值",
+            Description = "参与比较的数值，通常来自变量。",
+            DefaultValue = 5.0
+        },
+        new StepParameterDescriptor
+        {
+            Name = nameof(LimitCheckStepSettings.Min),
+            Kind = StepParameterKind.Number,
+            DisplayName = "下限",
+            Description = "允许的最小值（含）。",
+            DefaultValue = 4.8
+        },
+        new StepParameterDescriptor
+        {
+            Name = nameof(LimitCheckStepSettings.Max),
+            Kind = StepParameterKind.Number,
+            DisplayName = "上限",
+            Description = "允许的最大值（含）。",
+            DefaultValue = 5.2
+        }
+    ];
+
     public object CreateDefaultSettings() => new LimitCheckStepSettings();
 
     public object LoadSettings(IReadOnlyDictionary<string, object?> parameters)

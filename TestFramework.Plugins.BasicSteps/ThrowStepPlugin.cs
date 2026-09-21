@@ -18,6 +18,18 @@ public sealed class ThrowStepPlugin : ITestStepPlugin
 
     public Type SettingsType => typeof(ThrowStepSettings);
 
+    public IReadOnlyList<StepParameterDescriptor> Parameters { get; } =
+    [
+        new StepParameterDescriptor
+        {
+            Name = nameof(ThrowStepSettings.Message),
+            Kind = StepParameterKind.String,
+            DisplayName = "异常消息",
+            Description = "抛出的异常所携带的消息。",
+            DefaultValue = "模拟 Step 异常"
+        }
+    ];
+
     public object CreateDefaultSettings() => new ThrowStepSettings();
 
     public object LoadSettings(IReadOnlyDictionary<string, object?> parameters)

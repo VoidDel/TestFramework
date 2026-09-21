@@ -19,6 +19,18 @@ public sealed class LogStepPlugin : ITestStepPlugin
 
     public Type SettingsType => typeof(LogStepSettings);
 
+    public IReadOnlyList<StepParameterDescriptor> Parameters { get; } =
+    [
+        new StepParameterDescriptor
+        {
+            Name = nameof(LogStepSettings.Message),
+            Kind = StepParameterKind.String,
+            DisplayName = "消息",
+            Description = "写入执行日志的文本。",
+            DefaultValue = "日志消息"
+        }
+    ];
+
     public object CreateDefaultSettings() => new LogStepSettings();
 
     public object LoadSettings(IReadOnlyDictionary<string, object?> parameters)

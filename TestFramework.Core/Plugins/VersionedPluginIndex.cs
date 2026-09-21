@@ -63,7 +63,10 @@ internal sealed class VersionedPluginIndex<TPlugin>
 
             if (!versions.TryAdd(version, plugin))
             {
-                throw new InvalidOperationException($"{_kind} '{pluginId}' version '{version}' is already registered.");
+                // The instance that won travels with the exception: the registry knows which plugin
+                // stays, the loader knows which file each one came from, and the operator needs both
+                // halves to act on the report.
+                throw new DuplicatePluginException(_kind, pluginId, version, versions[version]);
             }
         }
     }

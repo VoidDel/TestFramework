@@ -10,7 +10,7 @@ public sealed class PluginRegistry : IPluginRegistry
         plugin => plugin.Descriptor.Version);
 
     public IReadOnlyCollection<ITestStepPlugin> Plugins => _index.Plugins
-        .OrderBy(plugin => plugin.Descriptor.Category)
+        .OrderBy(plugin => plugin.Descriptor.Category ?? string.Empty, StringComparer.Ordinal)
         .ThenBy(plugin => plugin.Descriptor.DisplayName)
         .ThenByDescending(plugin => plugin.Descriptor.Version)
         .ToArray();

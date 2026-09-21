@@ -33,12 +33,12 @@ public sealed class PluginDirectoryLoadReport
 
     public int LoadedCount => StepPlugins.Count + InstrumentDrivers.Count + Transports.Count + Services.Count;
 
-    internal void AddFailure(string assemblyPath, Exception exception)
+    internal void AddFailure(string assemblyPath, Exception exception, string? message = null)
     {
         Failures.Add(new PluginLoadFailure
         {
             AssemblyPath = assemblyPath,
-            Message = exception.Message,
+            Message = message ?? exception.Message,
             Exception = exception
         });
     }

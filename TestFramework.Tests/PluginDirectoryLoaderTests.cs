@@ -67,6 +67,29 @@ public sealed class PluginDirectoryLoaderTests
     }
 
     [Fact]
+    public void LoadFromDirectory_SamePluginDeployedTwice_NamesTheCopyItKept()
+    {
+        using var directory = new TempPluginDirectory();
+        var first = directory.CopyInto("a-package", typeof(DelayStepPlugin).Assembly);
+        var second = directory.CopyInto("b-package", typeof(DelayStepPlugin).Assembly);
+
+        var report = new PluginDirectoryLoader(new PluginRegistry(), new ResourcePluginRegistry())
+            .LoadFromDirectory(directory.Path);
+
+        // The operator has two identical packages installed and needs to know which one is live.
+        // "Already registered" on its own does not answer that.
+        var failure = Assert.Single(
+            report.Failures,
+            candidate => candidate.Message.Contains("basic.delay", StringComparison.Ordinal));
+        Assert.Contains(first, failure.Message, StringComparison.Ordinal);
+        Assert.Contains(second, failure.Message, StringComparison.Ordinal);
+        Assert.IsType<DuplicatePluginException>(failure.Exception);
+
+        // Scan order is path order, so the same two folders resolve the same way on every machine.
+        Assert.Equal(first, report.PluginPaths[Assert.Single(report.StepPlugins, plugin => plugin.Descriptor.PluginId == "basic.delay")]);
+    }
+
+    [Fact]
     public void LoadFromDirectory_MissingDirectory_ReturnsAnEmptyReport()
     {
         var report = new PluginDirectoryLoader(new PluginRegistry(), new ResourcePluginRegistry())

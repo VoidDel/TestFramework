@@ -64,6 +64,19 @@ public sealed class PluginLoader
                 report.LoadedPlugins.Add(plugin);
                 report.PluginPaths[plugin] = assemblyPath;
             }
+            catch (DuplicatePluginException duplicate)
+            {
+                var keptPath = duplicate.RegisteredPlugin is ITestStepPlugin registered &&
+                    report.PluginPaths.TryGetValue(registered, out var path)
+                    ? path
+                    : null;
+                report.Failures.Add(new PluginLoadFailure
+                {
+                    AssemblyPath = assemblyPath,
+                    Message = duplicate.DescribeWithPaths(keptPath, assemblyPath),
+                    Exception = duplicate
+                });
+            }
             catch (Exception ex)
             {
                 report.Failures.Add(new PluginLoadFailure

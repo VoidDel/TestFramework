@@ -17,7 +17,14 @@ internal static class PluginAssemblyScan
     /// </summary>
     public static IEnumerable<string> EnumerateCandidateAssemblies(string directory)
     {
-        foreach (var file in Directory.EnumerateFiles(directory, "*.dll", SearchOption.AllDirectories))
+        // Ordered, because when the same plugin id and version is deployed twice the first one
+        // scanned is the one that stays. Left to the file system that choice varies by machine and
+        // by the order the folders happened to be written, which makes the duplicate report - and
+        // the run itself - irreproducible. Path order is arbitrary but at least it is stable.
+        var files = Directory.EnumerateFiles(directory, "*.dll", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in files)
         {
             // A copy of an assembly the host shares (the contracts, Avalonia) is not a plugin and
             // must never be loaded privately - see PluginAssemblyLoadContext.IsSharedWithHost.

@@ -81,7 +81,7 @@ public sealed class ResourcePluginRegistry : IResourcePluginCatalog
         Func<TPlugin, ResourcePluginDescriptor> getDescriptor)
     {
         return plugins
-            .OrderBy(plugin => getDescriptor(plugin).Category)
+            .OrderBy(plugin => getDescriptor(plugin).Category ?? string.Empty, StringComparer.Ordinal)
             .ThenBy(plugin => getDescriptor(plugin).DisplayName)
             .ThenByDescending(plugin => getDescriptor(plugin).Version)
             .ToArray();

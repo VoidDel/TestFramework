@@ -43,10 +43,17 @@ public sealed class PluginRegistryTests
     public void Register_RejectsDuplicatePluginVersion()
     {
         var registry = new PluginRegistry();
-        registry.Register(new StubPlugin("demo.step", new Version(1, 0, 0)));
+        var first = new StubPlugin("demo.step", new Version(1, 0, 0));
+        registry.Register(first);
 
-        Assert.Throws<InvalidOperationException>(() =>
+        var duplicate = Assert.Throws<DuplicatePluginException>(() =>
             registry.Register(new StubPlugin("demo.step", new Version(1, 0, 0))));
+
+        // The winner travels with the exception: the registry cannot name files, so the loader
+        // needs the instance to look up where the copy it kept came from.
+        Assert.Same(first, duplicate.RegisteredPlugin);
+        Assert.Equal("demo.step", duplicate.PluginId);
+        Assert.Equal(new Version(1, 0, 0), duplicate.Version);
     }
 
     [Fact]

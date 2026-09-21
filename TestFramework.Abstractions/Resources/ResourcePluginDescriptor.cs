@@ -8,7 +8,11 @@ public sealed class ResourcePluginDescriptor
 
     public required Version Version { get; init; }
 
-    public string Category { get; init; } = "General";
+    /// <summary>
+    /// Where this resource plugin belongs in a host's palette. Null means the plugin states no
+    /// opinion - see <see cref="Plugins.TestStepPluginDescriptor.Category"/>.
+    /// </summary>
+    public string? Category { get; init; }
 
     public string? Description { get; init; }
 }

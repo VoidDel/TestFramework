@@ -150,6 +150,14 @@ public sealed class PluginDirectoryLoader
         {
             register();
         }
+        catch (DuplicatePluginException duplicate)
+        {
+            // Name both files. "Already registered" alone leaves the operator with two copies of one
+            // plugin and no way to tell which is running, and the answer depends on scan order.
+            report.PluginPaths.TryGetValue(duplicate.RegisteredPlugin, out var keptPath);
+            report.AddFailure(file, duplicate, duplicate.DescribeWithPaths(keptPath, file));
+            return;
+        }
         catch (Exception ex)
         {
             report.AddFailure(file, ex);

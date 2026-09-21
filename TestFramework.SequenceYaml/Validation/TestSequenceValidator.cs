@@ -43,11 +43,26 @@ public sealed class TestSequenceValidator
         return issues;
     }
 
+    /// <summary>
+    /// Walks the items in execution order, carrying the set of variables that exist by the time
+    /// each step runs.
+    ///
+    /// The set grows: a step's <c>variableWrites</c> defines a variable for everything after it.
+    /// Seeding it from <c>sequence.Variables</c> and never extending it reported the sequence this
+    /// feature exists for - measure in one step, use <c>${measured}</c> in the next - as referencing
+    /// an undefined variable, an error severe enough to stop a run that would in fact have worked.
+    ///
+    /// It accumulates across items, not per item, because variables are sequence-scoped: an item
+    /// reading what an earlier item wrote is legitimate. A reference to a variable written only by
+    /// a <i>later</i> step stays an error, which is why a step's own writes are added after its
+    /// parameters have been checked.
+    /// </summary>
     private void ValidateItems(
         IReadOnlyList<TestItemDefinition> items,
         IReadOnlyCollection<string> variableNames,
         ICollection<ValidationIssue> issues)
     {
+        var defined = new HashSet<string>(variableNames, StringComparer.OrdinalIgnoreCase);
         var itemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
         {
@@ -78,9 +93,9 @@ public sealed class TestSequenceValidator
             ValidateVerdictSource(item.VerdictSource, $"{itemPath}.verdictSource", issues);
 
             var stepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, variableNames, issues);
-            ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, variableNames, issues);
-            ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, variableNames, issues);
+            ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, defined, issues);
+            ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, defined, issues);
+            ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, defined, issues);
         }
     }
 
@@ -359,11 +374,15 @@ public sealed class TestSequenceValidator
         }
     }
 
+    /// <summary>
+    /// Validates a section's steps in order, extending <paramref name="definedVariables"/> with each
+    /// step's <c>variableWrites</c> once that step's own parameters have been checked.
+    /// </summary>
     private void ValidateSteps(
         IReadOnlyList<TestStepDefinition> steps,
         string path,
         ISet<string> stepIds,
-        IReadOnlyCollection<string> variableNames,
+        HashSet<string> definedVariables,
         ICollection<ValidationIssue> issues)
     {
         for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
@@ -407,11 +426,18 @@ public sealed class TestSequenceValidator
 
                     // Against the version that will actually run, not the one the file asks for:
                     // a substituted 1.2 may declare a parameter the pinned 1.0 did not.
-                    ValidateParameters(resolution.Plugin, step, stepPath, variableNames, issues);
+                    ValidateParameters(resolution.Plugin, step, stepPath, definedVariables, issues);
                 }
             }
 
             ValidateVariableWrites(step.VariableWrites, $"{stepPath}.variableWrites", issues);
+
+            // After this step's own parameters: a step cannot reference the variable it is about to
+            // write, because the write happens once it has finished executing.
+            foreach (var write in step.VariableWrites.Where(write => !string.IsNullOrWhiteSpace(write.Name)))
+            {
+                definedVariables.Add(write.Name);
+            }
         }
     }
 

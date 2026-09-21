@@ -1,4 +1,5 @@
 using System.Globalization;
+using TestFramework.Abstractions.Models;
 
 namespace TestFramework.Plugin.Abstractions.UI;
 
@@ -19,7 +20,7 @@ public static class SettingsValueConverter
         }
 
         var trimmed = text.Trim();
-        if (trimmed.Contains("${", StringComparison.Ordinal))
+        if (IsVariableReference(trimmed))
         {
             return text;
         }
@@ -83,10 +84,16 @@ public static class SettingsValueConverter
         return value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     }
 
-    public static bool IsVariableReference(object? value)
-    {
-        return value is string text && text.Contains("${", StringComparison.Ordinal);
-    }
+    /// <summary>
+    /// Whether the value carries a <c>${variable}</c> reference, decided by
+    /// <see cref="VariableReference"/> - the same rule the validator and the runner use.
+    ///
+    /// It used to be a <c>Contains("${")</c> of its own, which answered yes for text the framework
+    /// treats as a plain literal: an editor then protected <c>${my var}</c> as a binding while the
+    /// runner passed it to the plugin as characters. One pattern, one answer, which is the whole
+    /// reason <see cref="VariableReference"/> exists.
+    /// </summary>
+    public static bool IsVariableReference(object? value) => VariableReference.IsReference(value);
 
     public static bool ValuesEqual(object? left, object? right)
     {

@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\TestFramework.Abstractions\TestFramework.Abstractions.csproj" />
     <ProjectReference Include="..\TestFramework.Core\TestFramework.Core.csproj" />
+    <ProjectReference Include="..\TestFramework.Plugin.Abstractions.UI\TestFramework.Plugin.Abstractions.UI.csproj" />
     <ProjectReference Include="..\TestFramework.Plugins.BasicSteps\TestFramework.Plugins.BasicSteps.csproj" />
     <ProjectReference Include="..\TestFramework.SequenceYaml\TestFramework.SequenceYaml.csproj" />
   </ItemGroup>

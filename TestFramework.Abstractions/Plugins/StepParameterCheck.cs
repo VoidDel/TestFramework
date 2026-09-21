@@ -94,6 +94,21 @@ public static class StepParameterCheck
             return;
         }
 
+        // Looks like a reference but is not one: ${1stReading}, ${my var}, a missing closing brace.
+        // The resolver leaves it alone and the plugin receives the literal text, so without this
+        // nothing downstream ever objects - and a near-miss is exactly the shape a mistyped variable
+        // name takes. A warning rather than an error, because a parameter is allowed to carry '${'
+        // on purpose; what it is not allowed to do is look like a binding and silently not be one.
+        if (value is string text && text.Contains("${", StringComparison.Ordinal))
+        {
+            problems.Add(new StepParameterProblem
+            {
+                ParameterName = descriptor.Name,
+                IsWarning = true,
+                Message = $"Parameter '{descriptor.Label}' contains '${{' but no valid variable reference, so it is passed through as literal text. A variable name starts with a letter or underscore and continues with letters, digits, '_', '.' or '-'."
+            });
+        }
+
         switch (descriptor.Kind)
         {
             case StepParameterKind.Integer:

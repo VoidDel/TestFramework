@@ -4,8 +4,12 @@ namespace TestFramework.Abstractions.Plugins;
 
 public interface ITestStepPlugin
 {
-    // Plugin instances are reused. The application serializes sequence runs by default;
-    // hosts that execute multiple runners concurrently must provide thread-safe plugins.
+    // One instance per registered plugin, reused by every step that names it and by every run.
+    // A single TestSequenceRunner executes its own steps one at a time, and refuses to start a run
+    // while a previous run's plugin has not exited - but only a runner that the host keeps across
+    // runs can refuse that, and nothing above it serializes anything. A host driving several
+    // runners at once must supply thread-safe plugins. See TestSequenceRunner.PendingStepsCompletion
+    // for the protocol a host owes a plugin instance that has not yet exited.
     TestStepPluginDescriptor Descriptor { get; }
 
     Type SettingsType { get; }

@@ -13,7 +13,8 @@ public sealed class TestSequenceRunner
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
     private readonly IPluginRegistry _pluginRegistry;
     private readonly ITestExecutionObserver _observer;
-    private readonly RuntimeResourceProvider _resources;
+    private readonly RuntimeResourceProvider _defaultResources;
+    private RuntimeResourceProvider _resources;
     private int _running;
     private bool _abandonedStep;
 
@@ -40,10 +41,44 @@ public sealed class TestSequenceRunner
     {
         _pluginRegistry = pluginRegistry;
         _observer = new SafeExecutionObserver(observer ?? new NullTestExecutionObserver());
-        _resources = resources ?? RuntimeResourceProvider.Empty;
+        _defaultResources = resources ?? RuntimeResourceProvider.Empty;
+        _resources = _defaultResources;
     }
 
-    public async Task<TestSequenceRunResult> RunAsync(TestSequence sequence, CancellationToken cancellationToken = default)
+    /// <summary>Runs a sequence against the resources this runner was constructed with.</summary>
+    public Task<TestSequenceRunResult> RunAsync(TestSequence sequence, CancellationToken cancellationToken = default) =>
+        RunGuardedAsync(sequence, null, cancellationToken);
+
+    /// <summary>
+    /// Runs a sequence against a scope opened for this run alone, keeping one runner alive across
+    /// every run.
+    ///
+    /// This exists because the two ways of supplying resources have to compose. A station scope
+    /// hands out a fresh <see cref="RuntimeResourceProvider"/> per run, and when resources can only
+    /// arrive through the constructor a host has no choice but to build a new runner each time -
+    /// which quietly discards the protection this class provides. <c>_running</c>,
+    /// <see cref="PendingStepsCompletion"/> and the quarantine flag are per-instance, so a plugin
+    /// abandoned by the previous run is unknown to the next runner, which then resolves the same
+    /// singleton plugin instance out of the registry and calls <c>ExecuteAsync</c> on it a second
+    /// time while the first call is still talking to the hardware.
+    ///
+    /// Passing the scope per run instead lets a host keep one runner for the life of the bench, so
+    /// the gate covers the boundary it was always meant to cover: a run that follows an abandoned
+    /// step is refused here rather than left to every host to re-derive.
+    /// </summary>
+    public Task<TestSequenceRunResult> RunAsync(
+        TestSequence sequence,
+        RuntimeResourceProvider resources,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        return RunGuardedAsync(sequence, resources, cancellationToken);
+    }
+
+    private async Task<TestSequenceRunResult> RunGuardedAsync(
+        TestSequence sequence,
+        RuntimeResourceProvider? resources,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(sequence);
         if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
@@ -53,6 +88,10 @@ public sealed class TestSequenceRunner
 
         try
         {
+            // Only after the gate is held: a refused run must not swap the scope out from under
+            // the run that is still using it. A step already executing keeps the scope it captured
+            // in its context, so an abandoned step is unaffected by a later run's resources.
+            _resources = resources ?? _defaultResources;
             _abandonedStep = false;
             _reportedSubstitutions.Clear();
             return await RunCoreAsync(sequence, cancellationToken).ConfigureAwait(false);

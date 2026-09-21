@@ -168,9 +168,40 @@ Cleanup steps run when normal execution completes and after both `Stop` and `Jum
 
 Step execution (including synchronous plugin code and settings loading) runs off the UI thread. The host bounds its wait by the step timeout and user cancellation. A plugin that exits more than 100 ms after cancellation is quarantined: the sequence stops without executing further steps or cleanup against the same resources. `HasPendingExecution` records this condition in the result. A host using `TestSequenceRunner` directly must await `PendingStepsCompletion` before releasing resources or reusing plugin instances, and must keep the resources alive until it completes. Resource cleanup attempts every resource and aggregates failures. A host is expected to surface a cleanup failure and stop accepting runs: the device state is unknown, and the next run would measure against it.
 
+That gate is per-runner, so **a host keeps one `TestSequenceRunner` for the life of the bench** and
+passes each run's scope to `RunAsync(sequence, resources, cancellationToken)`. Supplying resources
+through the constructor instead forces a new runner whenever the scope changes - which a station
+scope does every run - and a new runner knows nothing about the plugin the previous one abandoned.
+It would resolve the same singleton plugin instance out of the registry and call `ExecuteAsync` on
+it while the first call is still driving the hardware. The constructor argument remains for a host
+whose resources never change across runs.
+
 In-process .NET plugins cannot be forcibly terminated safely. Quarantine prevents concurrent reuse, but does not stop native calls or hardware commands already in progress. Hard termination requires a separate plugin worker process, which is outside the current execution model.
 
 Cancellation throws `TestSequenceCancelledException` (an `OperationCanceledException`) from the core runner. Its `Result` includes completed steps, the interrupted step, variable snapshots, timestamps and a `Cancelled` verdict - a host should persist it rather than discard it, because it is the record of what the device under test was actually asked to do. Configured verdict output keys that are absent produce `Error`, never a fallback `Pass`.
+
+### Numeric Verdicts and Units
+
+A numeric verdict compares a step output against `lowerLimit` and `upperLimit`. Which scale that
+comparison happens in is decided by two fields, and the rule is worth stating precisely because
+getting it wrong means passing a DUT that should have failed:
+
+- `unit` is **the unit the limits are written in** - the conversion target. Leaving it empty asks
+  for no conversion at all, and the limits are then read in whatever unit the measurement itself is
+  in. That is a supported configuration, not an oversight: a plugin whose readings are always in mV
+  pairs with limits written in mV.
+- `sourceUnit` is the measurement's unit. It applies **only when the measured value does not carry
+  one itself**.
+- A value that carries its own unit (`"1234 mV"`) overrides `sourceUnit`. The instrument knows what
+  it returned better than the sequence file does.
+- When `unit` is declared and differs from the measurement's unit, both must be units this build
+  knows and both must be of the same dimension. An unrecognised unit, or `mV` against `ms`,
+  produces `Inconclusive` - the comparison is never made on raw numbers as a fallback, because a
+  silent comparison in the wrong scale is exactly the failure this resolution exists to prevent.
+  A value that is not a number at all is `Inconclusive` for the same reason.
+
+`Ω` normalises to `Ohm`, and both `µ` (U+00B5 MICRO SIGN) and `μ` (U+03BC GREEK SMALL LETTER MU)
+normalise to `u`, since instruments and operators produce either one.
 
 ## Variables
 

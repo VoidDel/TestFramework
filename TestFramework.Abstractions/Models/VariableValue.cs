@@ -56,4 +56,38 @@ public static class VariableValue
         collision = string.Empty;
         return false;
     }
+
+    /// <summary>
+    /// The sequence's variables, mapped to what each is statically known to hold before the run -
+    /// or <c>null</c> where that is not knowable.
+    ///
+    /// A variable's type is knowable from its initial value only for as long as nothing reassigns
+    /// it. A sequence that writes to it can produce a different type, and whether a particular
+    /// write executes depends on enablement and on error policies, which no amount of reading the
+    /// file settles. So a variable written anywhere is reported as "defined, type unknown" rather
+    /// than guessed at: claiming wrongly that it holds a string would block a run that works.
+    ///
+    /// This is what both <c>StepParameterCheck</c>'s callers pass: the validator, and a host
+    /// building a settings form. Computing it in one place is what keeps a value the form accepts
+    /// from being one the validator later refuses.
+    /// </summary>
+    public static Dictionary<string, object?> KnownIn(TestSequence sequence)
+    {
+        ArgumentNullException.ThrowIfNull(sequence);
+
+        var reassigned = sequence.Items
+            .SelectMany(item => item.InitSteps.Concat(item.MainSteps).Concat(item.CleanupSteps))
+            .SelectMany(step => step.VariableWrites)
+            .Select(write => write.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var known = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in sequence.Variables)
+        {
+            known[name] = reassigned.Contains(name) ? null : value;
+        }
+
+        return known;
+    }
 }

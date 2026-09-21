@@ -32,10 +32,21 @@ public sealed class StepParameterProblem
 /// </summary>
 public static class StepParameterCheck
 {
+    /// <summary>
+    /// Checks a step's parameter values against what its plugin declares.
+    /// </summary>
+    /// <param name="definedVariables">
+    /// The variables that exist where this step runs, mapped to the value each is statically known
+    /// to hold - or <c>null</c> where it is not knowable, which is the case for anything a plugin
+    /// writes. A key must be present for the variable to count as defined, so a caller that knows
+    /// only the names maps them all to <c>null</c>. Passing the whole map instead of just the names
+    /// is what lets <c>${targetVoltage}</c> in a Number parameter be checked at all, rather than
+    /// suspending every check the moment a value comes from a variable.
+    /// </param>
     public static IReadOnlyList<StepParameterProblem> Check(
         IReadOnlyList<StepParameterDescriptor> declared,
         IReadOnlyDictionary<string, object?> parameters,
-        IReadOnlyCollection<string>? definedVariables = null)
+        IReadOnlyDictionary<string, object?>? definedVariables = null)
     {
         ArgumentNullException.ThrowIfNull(declared);
         ArgumentNullException.ThrowIfNull(parameters);
@@ -48,9 +59,7 @@ public static class StepParameterCheck
         }
 
         var problems = new List<StepParameterProblem>();
-        var variables = definedVariables is null
-            ? null
-            : new HashSet<string>(definedVariables, StringComparer.OrdinalIgnoreCase);
+        var variables = CaseInsensitive(definedVariables);
 
         foreach (var descriptor in declared)
         {
@@ -71,10 +80,31 @@ public static class StepParameterCheck
         return problems;
     }
 
+    /// <summary>
+    /// A case-insensitive copy, because the variable table is case-insensitive and a caller may
+    /// hand over any dictionary. Built with the indexer rather than a copy constructor: two keys
+    /// differing only by case must not turn a check into an exception.
+    /// </summary>
+    private static Dictionary<string, object?>? CaseInsensitive(IReadOnlyDictionary<string, object?>? source)
+    {
+        if (source is null)
+        {
+            return null;
+        }
+
+        var copy = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in source)
+        {
+            copy[key] = value;
+        }
+
+        return copy;
+    }
+
     private static void CheckOne(
         StepParameterDescriptor descriptor,
         IReadOnlyDictionary<string, object?> parameters,
-        HashSet<string>? variables,
+        Dictionary<string, object?>? variables,
         ICollection<StepParameterProblem> problems)
     {
         if (!parameters.TryGetValue(descriptor.Name, out var value) || value is null)
@@ -98,8 +128,8 @@ public static class StepParameterCheck
         // The resolver leaves it alone and the plugin receives the literal text, so without this
         // nothing downstream ever objects - and a near-miss is exactly the shape a mistyped variable
         // name takes. A warning rather than an error, because a parameter is allowed to carry '${'
-        // on purpose; what it is not allowed to do is look like a binding and silently not be one.
-        if (value is string text && text.Contains("${", StringComparison.Ordinal))
+        // on purpose - it writes '$${' to say so, which is why this can tell the two apart.
+        if (VariableReference.HasMalformedReference(value))
         {
             problems.Add(new StepParameterProblem
             {
@@ -135,7 +165,7 @@ public static class StepParameterCheck
     private static void CheckVariableReference(
         StepParameterDescriptor descriptor,
         object? value,
-        HashSet<string>? variables,
+        Dictionary<string, object?>? variables,
         ICollection<StepParameterProblem> problems)
     {
         if (!descriptor.AllowVariableReference)
@@ -151,11 +181,61 @@ public static class StepParameterCheck
             return;
         }
 
-        foreach (var name in VariableReference.NamesIn(value).Where(name => !variables.Contains(name)))
+        foreach (var name in VariableReference.NamesIn(value))
+        {
+            if (!variables.TryGetValue(name, out var known))
+            {
+                problems.Add(Problem(
+                    descriptor,
+                    $"Parameter '{descriptor.Label}' references variable '{name}', which is not defined."));
+                continue;
+            }
+
+            // The type is only checkable when the reference is the whole value - embedded in text
+            // the result is text whatever the variable holds - and when the variable's value is
+            // actually knowable before the run. A null here means it is not: something writes it
+            // and only the plugin decides what comes out.
+            if (known is not null && VariableReference.IsWholeValueReference(value))
+            {
+                CheckKnownVariableValue(descriptor, name, known, problems);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks what a variable is known to hold against the kind the parameter declares.
+    ///
+    /// This is the one thing declaring parameters was supposed to buy - catching a wrong type
+    /// before a run rather than part-way through one with a DUT connected - and a reference used to
+    /// switch it off entirely. For a variable whose value the file states and nothing reassigns,
+    /// the type is as knowable as a literal's, so it is checked like one.
+    ///
+    /// The range is deliberately not checked, only the type: a limit belongs to the value a run
+    /// produces, and the initial value is not that.
+    /// </summary>
+    private static void CheckKnownVariableValue(
+        StepParameterDescriptor descriptor,
+        string name,
+        object known,
+        ICollection<StepParameterProblem> problems)
+    {
+        var expectation = descriptor.Kind switch
+        {
+            StepParameterKind.Integer when !(TryAsDouble(known, out var number) && number == Math.Truncate(number)) =>
+                "a whole number",
+            StepParameterKind.Number when !TryAsDouble(known, out _) => "a number",
+            StepParameterKind.Boolean when !TryAsBoolean(known, out _) => "true or false",
+            StepParameterKind.Enum when descriptor.Choices.Count > 0 && !descriptor.Choices.Any(
+                choice => string.Equals(choice.Value, Describe(known), StringComparison.OrdinalIgnoreCase)) =>
+                "one of " + string.Join(", ", descriptor.Choices.Select(choice => $"'{choice.Value}'")),
+            _ => null
+        };
+
+        if (expectation is not null)
         {
             problems.Add(Problem(
                 descriptor,
-                $"Parameter '{descriptor.Label}' references variable '{name}', which is not defined."));
+                $"Parameter '{descriptor.Label}' must be {expectation}, but variable '{name}' holds '{Describe(known)}'."));
         }
     }
 

@@ -38,7 +38,7 @@ public sealed class TestSequenceValidator
         ValidateInstruments(sequence.Instruments, issues);
         ValidateTransports(sequence.Transports, sequence.Instruments, issues);
         ValidateServices(sequence.Services, sequence.Transports, issues);
-        ValidateItems(sequence.Items, sequence.Variables.Keys, issues);
+        ValidateItems(sequence.Items, VariableValue.KnownIn(sequence), issues);
 
         return issues;
     }
@@ -59,10 +59,10 @@ public sealed class TestSequenceValidator
     /// </summary>
     private void ValidateItems(
         IReadOnlyList<TestItemDefinition> items,
-        IReadOnlyCollection<string> variableNames,
+        IReadOnlyDictionary<string, object?> knownVariables,
         ICollection<ValidationIssue> issues)
     {
-        var defined = new HashSet<string>(variableNames, StringComparer.OrdinalIgnoreCase);
+        var defined = new Dictionary<string, object?>(knownVariables, StringComparer.OrdinalIgnoreCase);
         var itemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
         {
@@ -382,7 +382,7 @@ public sealed class TestSequenceValidator
         IReadOnlyList<TestStepDefinition> steps,
         string path,
         ISet<string> stepIds,
-        HashSet<string> definedVariables,
+        Dictionary<string, object?> definedVariables,
         ICollection<ValidationIssue> issues)
     {
         for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
@@ -434,9 +434,11 @@ public sealed class TestSequenceValidator
 
             // After this step's own parameters: a step cannot reference the variable it is about to
             // write, because the write happens once it has finished executing.
+            // Defined from here on, but with no knowable type: what a plugin output carries is
+            // the plugin's business, and a literal write may or may not execute.
             foreach (var write in step.VariableWrites.Where(write => !string.IsNullOrWhiteSpace(write.Name)))
             {
-                definedVariables.Add(write.Name);
+                definedVariables[write.Name] = null;
             }
         }
     }
@@ -456,7 +458,7 @@ public sealed class TestSequenceValidator
         ITestStepPlugin plugin,
         TestStepDefinition step,
         string stepPath,
-        IReadOnlyCollection<string> variableNames,
+        IReadOnlyDictionary<string, object?> definedVariables,
         ICollection<ValidationIssue> issues)
     {
         IReadOnlyList<StepParameterDescriptor> declared;
@@ -480,7 +482,7 @@ public sealed class TestSequenceValidator
             return;
         }
 
-        foreach (var problem in StepParameterCheck.Check(declared, step.Parameters, variableNames))
+        foreach (var problem in StepParameterCheck.Check(declared, step.Parameters, definedVariables))
         {
             issues.Add(new ValidationIssue
             {

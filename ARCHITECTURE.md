@@ -223,6 +223,25 @@ Step parameters can reference variables with `${name}`:
 - Variable references are resolved before `ITestStepPlugin.LoadSettings(...)`, so step plugins receive normal settings
   values and do not need to parse variable syntax themselves.
 - Undefined references produce a step error. Invalid explicit numeric values in built-in steps also produce an error instead of using defaults. The settings editor uses default preview values for bindings while preserving the original binding text.
+- `$${` writes a literal `${`: `$${targetVoltage}` reaches the plugin as the nine characters
+  `${targetVoltage}`. The escape is `$$` **only directly before a brace**, so `$$` anywhere else is
+  two dollar signs and is left alone.
+- Text that holds a `${` which is neither a reference nor an escape - `${1stReading}`,
+  `${my var}`, a missing closing brace - is reported as a warning. The resolver passes it through as
+  literal text, so nothing downstream would ever object, and those near-misses are exactly the shape
+  a mistyped variable name takes.
+
+A reference does not switch off the parameter's type check. Where the variable's value is knowable
+before the run, it is checked against the declared kind exactly as a literal would be:
+
+- Knowable means the value is written in the file and nothing reassigns it. A variable that any
+  `variableWrites` targets is treated as defined with an unknown type, because what a plugin output
+  carries is the plugin's business and whether a given write executes depends on enablement and on
+  error policies.
+- Only the type is checked, never the range: a limit belongs to the value a run produces, and an
+  initial value is not that.
+- Only a reference that is the whole value is checked. Embedded in text the result is text whatever
+  the variable holds.
 
 Steps can write variables after execution through `variableWrites`:
 

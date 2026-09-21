@@ -147,4 +147,29 @@ SDK 里那份副本消除。`TestFramework.Tests` 现已引用 `Plugin.Abstracti
 `sync-framework.ps1` 对 `0.3.0-dev` 验证：`BMS-TEST` 构建 0 警告，79 个用例全部通过，
 随后已切回正式 0.3.0。宿主无需改动。
 
-未动：问题 4（变量类型声明）与问题 5 的第一项（`ResolveValue` 递归深度保护，当前不可达）。
+**问题 4（类型检查）** 最终没有引入类型声明，而是发现类型**本来就在文件里**——保持 YAML 往返
+类型不变的那套工作已经让初始值带着自己的类型。所以不改 schema，只是把已有信息用起来：
+
+- `VariableValue.KnownIn(sequence)` 给出"变量 → 运行前可知的值"，可知的定义是：值写在文件里，
+  且**没有任何** `variableWrites` 写它。凡是被写的一律记为"已定义、类型未知"——插件输出携带
+  什么是插件的事，某次写入是否执行又取决于 `Enabled` 与错误策略，读文件定不下来。猜错会挡住
+  本来能跑的运行，而这条检查的目的正相反。
+- `StepParameterCheck.Check` 的第三个参数从"名字集合"改成"名字 → 已知值"的字典，于是
+  `${targetVoltage}` 落进 Number 参数时按字面量一视同仁地查类型。
+- 只查类型不查范围（范围属于运行产生的值），且只查"引用独占整个值"的情形（嵌在文本里结果
+  必然是文本）。
+- 同一份计算供校验器与宿主表单共用，因此表单不会接受校验器随后拒绝的值——`SequenceEditorView`
+  在能拿到整个序列的地方算好后传给编辑器窗口。
+
+**问题 5**：
+
+- `VariableResolver` 加了 64 层递归上限，与加载器的上限同值，因此任何能加载的文件都必然能解析。
+  它防的不是文件而是插件：`SaveSettings` 决定宿主写进 `Parameters` 的结构，一个自包含的结构
+  会一直递归到爆栈，而 `StackOverflowException` 捕获不了，进程连同 DUT 当前的动作一起没。
+- 转义落地为 `$${` → 字面量 `${`，且**仅在 `$$` 紧邻左花括号时**生效，其它位置的 `$$` 原样保留——
+  否则会改变所有已经含 `$$` 的值的含义。`VariableReference.HasMalformedReference` 因此能把
+  "想写引用写错了"和"故意写 `${`"分开，畸形警告不会误伤转义。
+
+以上对应用例：`VariableTypeCheckTests`（7 个）、`VariableResolverTests`（12 个）。`dotnet test`
+187 → 206 全部通过，0 警告。下游 `BMS-TEST` 两处调用点已同步（`SchemaSettingsEditor` 改传字典，
+`SequenceEditorView` 改传 `VariableValue.KnownIn`），对 `0.3.0-dev` 构建 0 警告、79 用例通过。

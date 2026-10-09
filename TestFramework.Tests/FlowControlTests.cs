@@ -452,7 +452,9 @@ public sealed class FlowControlTests
         var resolver = new FileSequenceResolver(directory.Path);
 
         Assert.Equal("inside", resolver.Resolve("inside.yaml").Id);
+        // Both separators: a file authored on Windows must mean the same on a Linux host.
         Assert.Throws<InvalidOperationException>(() => resolver.Resolve(@"..\outside.yaml"));
+        Assert.Throws<InvalidOperationException>(() => resolver.Resolve("../outside.yaml"));
         Assert.Throws<FileNotFoundException>(() => resolver.Resolve("missing.yaml"));
     }
 

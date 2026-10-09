@@ -33,7 +33,11 @@ public sealed class FileSequenceResolver : ISequenceResolver
     public string FullPathOf(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var full = Path.GetFullPath(Path.Combine(_baseDirectory, path));
+
+        // A sequence file is authored text, usually on Windows, so "shared\precheck.yaml" has to
+        // mean the same on a Linux host - where a backslash is otherwise just a character in a
+        // file name, and "..\x" would be a missing file rather than an escape attempt.
+        var full = Path.GetFullPath(Path.Combine(_baseDirectory, path.Replace('\\', Path.DirectorySeparatorChar)));
         var root = _baseDirectory.EndsWith(Path.DirectorySeparatorChar) ? _baseDirectory : _baseDirectory + Path.DirectorySeparatorChar;
         if (!full.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         {

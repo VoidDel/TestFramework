@@ -504,6 +504,23 @@ disposed when its last station detaches. Exclusive leases live in one `ResourceL
 generations, so two stations briefly on different handles to the same physical instrument still
 take turns.
 
+### Across processes
+
+The line scope is per process. A deployment that runs each station in its own process - each with
+its own session to one VISA instrument - names the instrument with the same `lockName` in every
+station's binding and gives its `StationResourceHost` a `CrossProcessLeaseProvider`. An exclusive
+lease on that alias then also takes a lock file named after it, opened with no sharing. The
+operating system owns that lock, so a process that dies releases it with its handles - no stale
+lock, no timeout to guess - and a lock directory on a network share coordinates machines.
+
+`RuntimeResourceProvider.LeaseAsync` takes a step's in-process leases first, in alias order, then
+its cross-process ones in *lock name* order. Aliases are per station and two stations may name one
+instrument differently, so only the lock name is an order both processes agree on; and nothing
+waits for an in-process lease while holding a cross-process one, so no cycle spans the two kinds.
+
+A lock serialises commands; it does not make a connection shareable. An interface one process at
+a time may open, such as a serial port, cannot be shared across processes this way.
+
 ## Results and Traceability
 
 A host passes a `TestRunInfo` - DUT serial number, operator, station, sequence file path and hash,

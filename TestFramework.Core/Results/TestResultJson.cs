@@ -23,8 +23,9 @@ namespace TestFramework.Core.Results;
 /// - every field of the result, its items, steps, attempts and measurements;
 /// - an exception, as its type name, message, stack trace and inner exceptions - reading gives a
 ///   <see cref="RecordedException"/>, since the original type may not even be loadable;
-/// - output and variable values as JSON can carry them: text, booleans, numbers (integral ones
-///   read back as <see cref="long"/>, others as <see cref="double"/>), lists and dictionaries.
+/// - output and variable values as JSON can carry them: text, booleans, numbers (integers read
+///   back as <see cref="long"/>, doubles - a whole one included, written 5.0 - as <see cref="double"/>),
+///   lists and dictionaries.
 ///   Non-finite numbers are written as "NaN" / "Infinity" text. Any other object is written as its
 ///   invariant <see cref="object.ToString"/>, because a result must always be writable - losing a
 ///   value's type is better than losing the whole record of what the DUT was asked to do.
@@ -257,16 +258,21 @@ public static class TestResultJson
             }
         }
 
+        /// <summary>
+        /// A whole double is written with a fraction - 5.0, not 5 - so it reads back as a double. As
+        /// 5 it would come back an integer, and a voltage of exactly 5 V would change type between
+        /// the run and its report, which is the drift the sequence format already refuses.
+        /// </summary>
         private static void WriteDouble(Utf8JsonWriter writer, double number)
         {
-            if (double.IsFinite(number))
-            {
-                writer.WriteNumberValue(number);
-            }
-            else
+            if (!double.IsFinite(number))
             {
                 writer.WriteStringValue(number.ToString(CultureInfo.InvariantCulture));
+                return;
             }
+
+            var text = number.ToString("R", CultureInfo.InvariantCulture);
+            writer.WriteRawValue(text.Contains('.') || text.Contains('E') || text.Contains('e') ? text : text + ".0");
         }
 
         private static object? ToPlain(JsonElement element)

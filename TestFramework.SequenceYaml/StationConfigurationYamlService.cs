@@ -113,6 +113,10 @@ public sealed class StationConfigurationYamlService
 
         public bool Shared { get; set; } = true;
 
+        // Omitted unless set, so a station file that shares nothing saves as it did before.
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public string? LockName { get; set; }
+
         public StationResourceBinding ToDomain() => new()
         {
             Alias = Alias,
@@ -123,7 +127,8 @@ public sealed class StationConfigurationYamlService
             Settings = new Dictionary<string, object?>(Settings, StringComparer.OrdinalIgnoreCase),
             Channel = Channel,
             Transport = Transport,
-            Shared = Shared
+            Shared = Shared,
+            LockName = string.IsNullOrWhiteSpace(LockName) ? null : LockName.Trim()
         };
 
         public static YamlStationResource FromDomain(StationResourceBinding binding) => new()
@@ -136,7 +141,8 @@ public sealed class StationConfigurationYamlService
             Settings = binding.Settings,
             Channel = binding.Channel,
             Transport = binding.Transport,
-            Shared = binding.Shared
+            Shared = binding.Shared,
+            LockName = string.IsNullOrWhiteSpace(binding.LockName) ? null : binding.LockName
         };
     }
 }

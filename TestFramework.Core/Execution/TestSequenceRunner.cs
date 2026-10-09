@@ -903,32 +903,19 @@ public sealed class TestSequenceRunner
             {
                 effectiveToken.ThrowIfCancellationRequested();
 
-                // Leases first, in one global order, then the plugin gate. A gate holder therefore
-                // never waits for a lease, and lease holders wait only for a gate whose holder is
-                // running, so two stations cannot hold one each and wait for the other's.
-                var leases = new List<IDisposable>(exclusive.Length);
-                try
-                {
-                    foreach (var alias in exclusive)
-                    {
-                        leases.Add(await scope.LeaseAsync(alias, effectiveToken).ConfigureAwait(false));
-                    }
-
-                    leasesAcquired = true;
-                    using var gate = await PluginExecutionGate.EnterAsync(plugin, effectiveToken).ConfigureAwait(false);
-                    gateAcquired = true;
-                    var settings = plugin.LoadSettings(resolvedParameters);
-                    return await plugin.ExecuteAsync(context, settings, effectiveToken).ConfigureAwait(false);
-                }
-                finally
-                {
-                    // Released when the plugin returns, not when this run stops waiting for it: an
-                    // abandoned step is still using the instrument.
-                    for (var index = leases.Count - 1; index >= 0; index--)
-                    {
-                        leases[index].Dispose();
-                    }
-                }
+                // Leases first, in one global order (see RuntimeResourceProvider.LeaseAsync), then
+                // the plugin gate. A gate holder therefore never waits for a lease, and lease holders
+                // wait only for a gate whose holder is running, so two stations cannot hold one each
+                // and wait for the other's. Released when the plugin returns, not when this run stops
+                // waiting for it: an abandoned step is still using the instrument.
+                using var leases = exclusive.Length == 0
+                    ? null
+                    : await scope.LeaseAsync(exclusive, effectiveToken).ConfigureAwait(false);
+                leasesAcquired = true;
+                using var gate = await PluginExecutionGate.EnterAsync(plugin, effectiveToken).ConfigureAwait(false);
+                gateAcquired = true;
+                var settings = plugin.LoadSettings(resolvedParameters);
+                return await plugin.ExecuteAsync(context, settings, effectiveToken).ConfigureAwait(false);
             }, CancellationToken.None);
             var result = await execution.WaitAsync(effectiveToken).ConfigureAwait(false);
             effectiveToken.ThrowIfCancellationRequested();

@@ -26,6 +26,7 @@ public sealed class StationResourceHost : IAsyncDisposable
 {
     private readonly ResourcePluginRegistry _plugins;
     private readonly LineResourceHost? _line;
+    private readonly IResourceLeaseProvider? _crossProcessLocks;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private StationConfiguration _station;
     private RuntimeResourceProvider? _session;
@@ -38,13 +39,23 @@ public sealed class StationResourceHost : IAsyncDisposable
     /// nests inside the line's, so a lookup that misses here reaches the shared instrument, and the
     /// line's <see cref="LineResourceHost.Invalidate"/> marks this station stale too.
     /// </param>
-    public StationResourceHost(StationConfiguration station, ResourcePluginRegistry plugins, LineResourceHost? line = null)
+    /// <param name="crossProcessLocks">
+    /// Where leases on bindings with a <see cref="StationResourceBinding.LockName"/> are taken
+    /// across processes - the instruments this station shares with stations in other processes.
+    /// Without it those leases stay in-process.
+    /// </param>
+    public StationResourceHost(
+        StationConfiguration station,
+        ResourcePluginRegistry plugins,
+        LineResourceHost? line = null,
+        IResourceLeaseProvider? crossProcessLocks = null)
     {
         ArgumentNullException.ThrowIfNull(station);
         ArgumentNullException.ThrowIfNull(plugins);
         _station = station;
         _plugins = plugins;
         _line = line;
+        _crossProcessLocks = crossProcessLocks;
         line?.Register(this);
     }
 
@@ -93,7 +104,7 @@ public sealed class StationResourceHost : IAsyncDisposable
         try
         {
             var session = await EnsureSessionAsync(cancellationToken).ConfigureAwait(false);
-            var run = new RuntimeResourceProvider(session);
+            var run = new RuntimeResourceProvider(session) { CrossProcessLocks = _crossProcessLocks };
 
             try
             {
@@ -169,7 +180,9 @@ public sealed class StationResourceHost : IAsyncDisposable
         // Attached to the line's current generation; a line that is itself stale rebuilds here, on
         // the first station to come back, and the others follow at their own next run.
         var parent = _line is null ? null : await _line.AttachAsync(cancellationToken).ConfigureAwait(false);
-        var session = parent is null ? new RuntimeResourceProvider() : new RuntimeResourceProvider(parent);
+        var session = parent is null
+            ? new RuntimeResourceProvider { CrossProcessLocks = _crossProcessLocks }
+            : new RuntimeResourceProvider(parent) { CrossProcessLocks = _crossProcessLocks };
         try
         {
             await ResourceBindingBuilder.BuildAsync(

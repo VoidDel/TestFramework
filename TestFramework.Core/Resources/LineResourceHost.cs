@@ -32,12 +32,19 @@ public sealed class LineResourceHost : IAsyncDisposable
     private bool _stale;
     private bool _disposed;
 
-    public LineResourceHost(StationConfiguration line, ResourcePluginRegistry plugins)
+    private readonly IResourceLeaseProvider? _crossProcessLocks;
+
+    /// <param name="crossProcessLocks">
+    /// Where leases on line bindings with a lock name are taken across processes, for a line
+    /// instrument another process also opens. Without it, leases are shared by this process only.
+    /// </param>
+    public LineResourceHost(StationConfiguration line, ResourcePluginRegistry plugins, IResourceLeaseProvider? crossProcessLocks = null)
     {
         ArgumentNullException.ThrowIfNull(line);
         ArgumentNullException.ThrowIfNull(plugins);
         _line = line;
         _plugins = plugins;
+        _crossProcessLocks = crossProcessLocks;
     }
 
     public StationConfiguration Line => _line;
@@ -172,7 +179,7 @@ public sealed class LineResourceHost : IAsyncDisposable
             }
         }
 
-        var provider = new RuntimeResourceProvider { Leases = _leases };
+        var provider = new RuntimeResourceProvider { Leases = _leases, CrossProcessLocks = _crossProcessLocks };
         try
         {
             await ResourceBindingBuilder.BuildAsync(_plugins, provider, _line.Resources, cancellationToken).ConfigureAwait(false);

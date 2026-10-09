@@ -36,6 +36,15 @@ public sealed class RuntimeResourceProvider :
     /// </summary>
     public ResourceLeaseTable Leases { get; init; } = new();
 
+    /// <summary>
+    /// Where the leases on resources registered with a lock name (<see cref="RegisterLockName"/>)
+    /// are taken across processes. Null leaves those leases in-process, which is right for a host
+    /// that is the only process on its bench.
+    /// </summary>
+    public IResourceLeaseProvider? CrossProcessLocks { get; init; }
+
+    private readonly Dictionary<string, string> _lockNames = new(StringComparer.OrdinalIgnoreCase);
+
     private ReadOnlyResourceScope? _scope;
     private readonly bool _isReadOnly;
     private readonly RuntimeResourceProvider? _parent;
@@ -89,18 +98,102 @@ public sealed class RuntimeResourceProvider :
     /// through to one line instrument contend for the same lock. An alias nothing provides is an
     /// error rather than a free lock: a misspelt <c>exclusive</c> would otherwise protect nothing.
     /// </summary>
-    public Task<IDisposable> LeaseAsync(string alias, CancellationToken cancellationToken)
+    public Task<IDisposable> LeaseAsync(string alias, CancellationToken cancellationToken) =>
+        LeaseAsync([alias], cancellationToken);
+
+    /// <summary>
+    /// Exclusive use of every alias at once: each one's in-process lease, then - for an alias
+    /// registered with a lock name - the cross-process lease on that name.
+    ///
+    /// The order is what keeps this free of deadlock. In-process leases are taken first, in alias
+    /// order; they only ever contend with this process. Cross-process leases come last, ordered by
+    /// <i>lock name</i>, not alias: two stations may call one instrument by different aliases, and
+    /// only the name they share is an order both processes agree on. Nothing waits for an
+    /// in-process lease while holding a cross-process one, so no cycle can span the two.
+    /// </summary>
+    public async Task<IDisposable> LeaseAsync(IReadOnlyCollection<string> aliases, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(aliases);
+        var owners = aliases
+            .Where(alias => !string.IsNullOrWhiteSpace(alias))
+            .Select(alias => alias.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(alias => (Alias: alias, Owner: OwnerOf(alias)))
+            .ToList();
+
+        var held = new List<IDisposable>(owners.Count * 2);
+        try
+        {
+            foreach (var (alias, owner) in owners.OrderBy(pair => pair.Alias, StringComparer.OrdinalIgnoreCase))
+            {
+                held.Add(await owner.Leases.LeaseAsync(alias, cancellationToken).ConfigureAwait(false));
+            }
+
+            var crossProcess = owners
+                .Where(pair => pair.Owner.CrossProcessLocks is not null && pair.Owner._lockNames.ContainsKey(pair.Alias))
+                .Select(pair => (Name: pair.Owner._lockNames[pair.Alias], Provider: pair.Owner.CrossProcessLocks!))
+                .DistinctBy(pair => pair.Name, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(pair => pair.Name, StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, provider) in crossProcess)
+            {
+                held.Add(await provider.LeaseAsync(name, cancellationToken).ConfigureAwait(false));
+            }
+
+            return new LeaseSet(held);
+        }
+        catch
+        {
+            new LeaseSet(held).Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Marks <paramref name="alias"/> as a physical instrument other processes also open, under
+    /// <paramref name="lockName"/>. Its exclusive leases are then taken across processes too, through
+    /// <see cref="CrossProcessLocks"/>.
+    /// </summary>
+    public void RegisterLockName(string alias, string lockName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(alias);
+        ArgumentException.ThrowIfNullOrWhiteSpace(lockName);
+        _lockNames[alias] = lockName.Trim();
+    }
+
+    /// <summary>
+    /// The scope that opened <paramref name="alias"/>, wherever in the chain: the lock is the owner's.
+    /// An alias nothing provides is an error rather than a free lock - a misspelt <c>exclusive</c>
+    /// would otherwise protect nothing.
+    /// </summary>
+    private RuntimeResourceProvider OwnerOf(string alias)
+    {
         for (var scope = this; scope is not null; scope = scope._parent)
         {
             if (scope.Owns(alias))
             {
-                return scope.Leases.LeaseAsync(alias, cancellationToken);
+                return scope;
             }
         }
 
         throw new InvalidOperationException($"Resource '{alias}' is not available, so it cannot be used exclusively.");
+    }
+
+    private sealed class LeaseSet(List<IDisposable> held) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) != 0)
+            {
+                return;
+            }
+
+            for (var index = held.Count - 1; index >= 0; index--)
+            {
+                held[index].Dispose();
+            }
+        }
     }
 
     private bool Owns(string alias) =>

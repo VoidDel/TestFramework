@@ -326,6 +326,29 @@ var stationB = new StationResourceHost(stationBConfig, resourcePlugins, line);
 
 完整示例见 [LineResourceTests.cs](TestFramework.Tests/LineResourceTests.cs)。
 
+#### 每个工位一个进程时
+
+产线资源层只在一个进程里有效。每个工位各开一个运行程序、各自连接同一台仪器时，在每个工位的配置里给这台仪器写同一个 `lockName`，并给 `StationResourceHost` 传一个跨进程锁：
+
+```yaml
+resources:
+- alias: dmm                 # 各工位的别名可以不同
+  kind: InstrumentDriver
+  driverId: keysight.34465a
+  resource: GPIB0::22::INSTR
+  lockName: dmm-gpib22       # 共用这台仪器的所有工位写同一个名字
+```
+
+```csharp
+var station = new StationResourceHost(stationConfig, resourcePlugins,
+    crossProcessLocks: new CrossProcessLeaseProvider(lockDirectory));   // 所有进程用同一个目录
+```
+
+- 步骤照样写 `exclusive: [dmm]`。运行器先取进程内的锁，再按 `lockName` 取跨进程的锁；别的进程的同类步骤排队等待。
+- 锁是锁目录下一个以独占方式打开的文件。进程崩溃或被杀时操作系统随句柄一起释放，不会留下卡死的锁。锁目录放在网络共享上，就能跨机器协调。
+- 一个步骤要多把跨进程锁时，按 `lockName` 的全局顺序获取——不能按别名，因为不同工位可能给同一台仪器起不同的名字。
+- **它不让连接变得可共享。** VISA（GPIB / LAN / USB-TMC）一般允许多个进程同时持有会话，这种仪器加锁即可；串口同一时刻只能被一个进程打开，不能这样共用。
+
 ## 内置步骤
 
 | 插件 | 作用 |

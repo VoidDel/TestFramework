@@ -65,6 +65,18 @@ public sealed class StationResourceBinding
     /// </summary>
     public bool Shared { get; set; } = true;
 
+    /// <summary>
+    /// The name every station's process uses for this physical instrument, when several stations -
+    /// each in its own runner process - open sessions to it. A step's <c>exclusive</c> lease on the
+    /// alias is then also taken across processes under this name, so their commands do not
+    /// interleave. The aliases may differ between stations; the lock name is what they agree on.
+    ///
+    /// Null for an instrument this station alone uses, which is the usual case. It does not make a
+    /// connection shareable: an interface only one process may open at a time, such as a serial
+    /// port, cannot be shared this way.
+    /// </summary>
+    public string? LockName { get; set; }
+
     /// <summary>Projects this binding onto the definition the driver plugins already take.</summary>
     public InstrumentDefinition ToInstrumentDefinition() => new()
     {

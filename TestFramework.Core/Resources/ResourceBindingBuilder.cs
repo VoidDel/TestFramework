@@ -23,6 +23,11 @@ internal static class ResourceBindingBuilder
             return;
         }
 
+        foreach (var binding in ordered.Where(binding => !string.IsNullOrWhiteSpace(binding.LockName)))
+        {
+            target.RegisterLockName(binding.Alias, binding.LockName!);
+        }
+
         foreach (var binding in ordered.Where(binding => binding.Kind == ResourcePluginKind.InstrumentDriver))
         {
             var plugin = plugins.GetRequiredInstrumentDriver(binding.DriverId, binding.DriverVersion);

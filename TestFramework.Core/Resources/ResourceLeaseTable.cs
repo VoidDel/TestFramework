@@ -10,7 +10,7 @@ namespace TestFramework.Core.Resources;
 /// previous generation. Two generations with two lock tables would let two stations talk to the one
 /// physical instrument at once - exactly during recovery, when it matters most.
 /// </summary>
-public sealed class ResourceLeaseTable
+public sealed class ResourceLeaseTable : IResourceLeaseProvider
 {
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
 

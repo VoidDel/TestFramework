@@ -82,7 +82,9 @@ public sealed class TestResultJsonTests
         Assert.Equal(new List<object?> { 3.3, 3.31 }, read["cells"]);
         var signals = Assert.IsType<Dictionary<string, object?>>(read["signals"]);
         Assert.Equal(95.5, signals["SOC"]);
-        Assert.Equal(1L, signals["soc"]);
+
+        // A whole double stays a double (written 1.0); an integer stays an integer.
+        Assert.Equal(1.0, Assert.IsType<double>(signals["soc"]));
         Assert.Equal(80L, read["count"]);
         Assert.Equal("NaN", read["nan"]);
         Assert.Equal("Ordinal", read["mode"]);
@@ -90,6 +92,22 @@ public sealed class TestResultJsonTests
 
         // The outputs dictionary itself keeps the framework's case-insensitivity.
         Assert.Equal(80L, read["COUNT"]);
+    }
+
+    [Fact]
+    public void WholeDouble_KeepsItsType_AcrossARoundTrip()
+    {
+        // A voltage of exactly 5 V must not come back from the report as the integer 5.
+        var result = SampleResult();
+        result.FinalVariables["voltage"] = 5.0;
+        result.FinalVariables["cells"] = 80;
+
+        var json = TestResultJson.Serialize(result);
+        var read = TestResultJson.Deserialize(json);
+
+        Assert.Equal(5.0, Assert.IsType<double>(read.FinalVariables["voltage"]));
+        Assert.Equal(80L, Assert.IsType<long>(read.FinalVariables["cells"]));
+        Assert.Contains("\"voltage\": 5.0", json, StringComparison.Ordinal);
     }
 
     [Fact]

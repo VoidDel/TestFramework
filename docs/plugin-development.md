@@ -164,6 +164,26 @@ public bool IsThreadSafe => true;
 - 不在两次调用之间保存状态（或自己加了锁）的插件返回 `true`，就能被多个工位同时调用。
 - 不确定就保持默认。错误地声明线程安全，后果是两个工位的帧交错、看起来像硬件故障。
 
+### 多工位共用的仪器
+
+步骤插件不需要为"仪器被几个工位共用"做任何事：序列在步骤上写 `exclusive: [dmm]`，运行器保证执行期间只有这个步骤在用它。
+
+需要按通道拆分（一台多路电源每个工位一路）时，写一个**通道视图**驱动：
+
+```csharp
+public Task<object> CreateAsync(InstrumentDefinition definition, IResourceScope resources, CancellationToken ct)
+{
+    var parent = resources.Instruments.GetRequired<MultiChannelPsu>(
+        Convert.ToString(definition.Settings["parent"])!);          // 产线级母机的别名
+    var channel = Convert.ToInt32(definition.Settings["channel"]);
+    return Task.FromResult<object>(new PsuChannel(parent, channel));   // 只管自己那一路
+}
+```
+
+工位配置把 `psu` 绑到这个驱动，`settings` 里写 `parent: psu-main`、`channel: 2`；母机 `psu-main` 由产线配置打开。向母机下发命令时若需要互斥，由视图对象自己加锁，或者让步骤写 `exclusive: [psu-main]`。
+
+`CreateAsync` 在进程内按插件实例排队，驱动不必考虑两个工位同时初始化它。
+
 ### 操作员交互（契约 1.1）
 
 需要操作员确认或选择时，通过 `context.Operator` 提问，不要自己弹窗——插件不知道宿主是桌面窗口、触摸屏还是无人值守的产线控制器：

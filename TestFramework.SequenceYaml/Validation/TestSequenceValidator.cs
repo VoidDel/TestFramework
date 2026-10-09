@@ -12,22 +12,29 @@ public sealed class TestSequenceValidator
     private readonly IResourcePluginCatalog? _resourcePlugins;
     private readonly StationConfiguration? _station;
     private readonly ISequenceResolver? _sequences;
+    private readonly StationConfiguration? _line;
 
     /// <param name="sequences">
     /// Resolves the sequences calls name, so a call to a file that does not exist - or with a
     /// parameter its target does not declare - is reported before the run. Without it, calls are
     /// checked only for what is visible in this file.
     /// </param>
+    /// <param name="line">
+    /// The resources the station's line shares, which satisfy a requirement the station itself
+    /// does not bind and are valid targets of a step's <c>exclusive</c>.
+    /// </param>
     public TestSequenceValidator(
         IPluginRegistry? pluginRegistry = null,
         IResourcePluginCatalog? resourcePlugins = null,
         StationConfiguration? station = null,
-        ISequenceResolver? sequences = null)
+        ISequenceResolver? sequences = null,
+        StationConfiguration? line = null)
     {
         _pluginRegistry = pluginRegistry;
         _resourcePlugins = resourcePlugins;
         _station = station;
         _sequences = sequences;
+        _line = line;
     }
 
     public IReadOnlyList<ValidationIssue> Validate(TestSequence sequence)
@@ -48,9 +55,26 @@ public sealed class TestSequenceValidator
         ValidateInstruments(sequence.Instruments, issues);
         ValidateTransports(sequence.Transports, sequence.Instruments, issues);
         ValidateServices(sequence.Services, sequence.Transports, issues);
-        ValidateItems(sequence.Items, VariableValue.KnownIn(sequence), issues);
+        ValidateItems(sequence.Items, VariableValue.KnownIn(sequence), ResourceAliasesOf(sequence), issues);
 
         return issues;
+    }
+
+    /// <summary>
+    /// Every alias a step could name in <c>exclusive</c>: what the sequence requires or opens
+    /// itself, plus what the station and its line bind when they are known here.
+    /// </summary>
+    private HashSet<string> ResourceAliasesOf(TestSequence sequence)
+    {
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        aliases.UnionWith(sequence.Requires.Select(requirement => requirement.Alias));
+        aliases.UnionWith(sequence.Instruments.Select(instrument => instrument.Id));
+        aliases.UnionWith(sequence.Transports.Select(transport => transport.Id));
+        aliases.UnionWith(sequence.Services.Select(service => service.Id));
+        aliases.UnionWith(_station?.Resources.Select(binding => binding.Alias) ?? []);
+        aliases.UnionWith(_line?.Resources.Select(binding => binding.Alias) ?? []);
+        aliases.Remove(string.Empty);
+        return aliases;
     }
 
     /// <summary>
@@ -70,11 +94,12 @@ public sealed class TestSequenceValidator
     private void ValidateItems(
         IReadOnlyList<TestItemDefinition> items,
         IReadOnlyDictionary<string, object?> knownVariables,
+        ISet<string> resourceAliases,
         ICollection<ValidationIssue> issues)
     {
         var defined = new Dictionary<string, object?>(knownVariables, StringComparer.OrdinalIgnoreCase);
         var itemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        ValidateItemList(items, "items", defined, itemIds, issues);
+        ValidateItemList(items, "items", defined, itemIds, resourceAliases, issues);
     }
 
     /// <summary>
@@ -87,11 +112,12 @@ public sealed class TestSequenceValidator
         string listPath,
         Dictionary<string, object?> defined,
         ISet<string> itemIds,
+        ISet<string> resourceAliases,
         ICollection<ValidationIssue> issues)
     {
         for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
         {
-            ValidateItem(items[itemIndex], $"{listPath}[{itemIndex}]", defined, itemIds, issues);
+            ValidateItem(items[itemIndex], $"{listPath}[{itemIndex}]", defined, itemIds, resourceAliases, issues);
         }
     }
 
@@ -100,6 +126,7 @@ public sealed class TestSequenceValidator
         string itemPath,
         Dictionary<string, object?> defined,
         ISet<string> itemIds,
+        ISet<string> resourceAliases,
         ICollection<ValidationIssue> issues)
     {
         ValidateId(item.Id, itemPath, "Test item ID", itemIds, issues);
@@ -117,11 +144,11 @@ public sealed class TestSequenceValidator
 
         if (item.IsGroup || item.IsCall)
         {
-            ValidateContainer(item, itemPath, defined, itemIds, issues);
+            ValidateContainer(item, itemPath, defined, itemIds, resourceAliases, issues);
         }
         else
         {
-            ValidateTestItem(item, itemPath, defined, issues);
+            ValidateTestItem(item, itemPath, defined, resourceAliases, issues);
         }
 
         // Last: an until is evaluated after the attempt, when everything the item wrote exists.
@@ -135,6 +162,7 @@ public sealed class TestSequenceValidator
         TestItemDefinition item,
         string itemPath,
         Dictionary<string, object?> defined,
+        ISet<string> resourceAliases,
         ICollection<ValidationIssue> issues)
     {
         if (item.MainSteps.Count == 0)
@@ -152,9 +180,9 @@ public sealed class TestSequenceValidator
         }
 
         var stepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, defined, issues);
-        ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, defined, issues);
-        ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, defined, issues);
+        ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, defined, resourceAliases, issues);
+        ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, defined, resourceAliases, issues);
+        ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, defined, resourceAliases, issues);
 
         // After the item's steps: the runner judges the item once they have all run, so a limit
         // may reference a variable one of them writes.
@@ -171,6 +199,7 @@ public sealed class TestSequenceValidator
         string itemPath,
         Dictionary<string, object?> defined,
         ISet<string> itemIds,
+        ISet<string> resourceAliases,
         ICollection<ValidationIssue> issues)
     {
         var kind = item.IsCall ? "call" : "group";
@@ -191,7 +220,7 @@ public sealed class TestSequenceValidator
 
         if (item.IsGroup)
         {
-            ValidateItemList(item.Items, $"{itemPath}.items", defined, itemIds, issues);
+            ValidateItemList(item.Items, $"{itemPath}.items", defined, itemIds, resourceAliases, issues);
         }
 
         if (item.Call is { } call)
@@ -654,7 +683,7 @@ public sealed class TestSequenceValidator
         // finding is a warning, and the sequence is not refused over the host's own configuration.
         var severity = _station is null ? ValidationSeverity.Warning : ValidationSeverity.Error;
 
-        foreach (var problem in StationBinding.Check(requirements, _station))
+        foreach (var problem in StationBinding.Check(requirements, _station, _line))
         {
             issues.Add(new ValidationIssue
             {
@@ -837,6 +866,7 @@ public sealed class TestSequenceValidator
         string path,
         ISet<string> stepIds,
         Dictionary<string, object?> definedVariables,
+        ISet<string> resourceAliases,
         ICollection<ValidationIssue> issues)
     {
         for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
@@ -845,6 +875,7 @@ public sealed class TestSequenceValidator
             var stepPath = $"{path}[{stepIndex}]";
 
             ValidateId(step.Id, stepPath, "Test step ID", stepIds, issues);
+            ValidateExclusive(step.Exclusive, $"{stepPath}.exclusive", resourceAliases, issues);
             ValidateVersion(step.PluginVersion, $"{stepPath}.pluginVersion", issues);
             if (step.TimeoutMs is <= 0)
             {
@@ -951,6 +982,46 @@ public sealed class TestSequenceValidator
                 Severity = problem.IsWarning ? ValidationSeverity.Warning : ValidationSeverity.Error,
                 Message = problem.Message
             });
+        }
+    }
+
+    /// <summary>
+    /// An <c>exclusive</c> alias must name a resource. At run time an alias nothing provides is a
+    /// step error; here it is a warning, because the line's resources are often not known to the
+    /// validator and a lease on them is exactly what the feature is for.
+    /// </summary>
+    private static void ValidateExclusive(
+        IReadOnlyList<string> exclusive,
+        string path,
+        ISet<string> resourceAliases,
+        ICollection<ValidationIssue> issues)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < exclusive.Count; index++)
+        {
+            var alias = exclusive[index];
+            var aliasPath = $"{path}[{index}]";
+            if (string.IsNullOrWhiteSpace(alias))
+            {
+                issues.Add(new ValidationIssue { Path = aliasPath, Message = "An exclusive resource alias cannot be empty." });
+                continue;
+            }
+
+            if (!seen.Add(alias.Trim()))
+            {
+                issues.Add(new ValidationIssue { Path = aliasPath, Severity = ValidationSeverity.Warning, Message = $"Exclusive alias '{alias}' is listed twice." });
+                continue;
+            }
+
+            if (!resourceAliases.Contains(alias.Trim()))
+            {
+                issues.Add(new ValidationIssue
+                {
+                    Path = aliasPath,
+                    Severity = ValidationSeverity.Warning,
+                    Message = $"Exclusive alias '{alias}' is not a resource this sequence declares or the station binds; unless the line provides it, the step will fail."
+                });
+            }
         }
     }
 

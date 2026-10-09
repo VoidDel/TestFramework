@@ -472,7 +472,37 @@ keyed by the instance). The gate is released when the plugin actually returns, n
 stops waiting for it, so an abandoned call keeps other stations out of a plugin that is still
 driving hardware. Time spent waiting counts against the step's timeout, and a step that times out
 in the queue says so rather than blaming the plugin. The built-in steps hold no state and are
-declared thread-safe.
+declared thread-safe. Resource plugins' `CreateAsync` is always serialised per instance
+(`ResourceCreationGate`): vendor SDKs are not reliably safe to initialise concurrently, opening is
+rare, and the failure would look like a flaky instrument rather than a race.
+
+## Line Resources and Exclusive Use
+
+Some instruments serve several stations - one DMM behind a switch matrix, one multi-channel supply -
+and can only be opened once per process. `LineResourceHost` holds them, described by a
+`StationConfiguration` like any bench, and each `StationResourceHost` on the line nests its station
+scope inside the line's. A lookup falls through run → station → line, so a step asks for `dmm`
+without knowing who opened it, and `StationBinding.Check` accepts a requirement the line binds.
+
+Sharing the object is not enough: two stations' SCPI transactions interleaved on one session are
+garbage. A step declares `exclusive: [dmm]`, and the runner leases each alias for the step's
+duration - taking leases in one global order, then the plugin gate, so a gate holder never waits
+for a lease and two stations cannot each hold one and wait for the other's. The lease is released
+when the plugin returns, not when the runner stops waiting for it, for the same reason the plugin
+gate is. Waiting counts against the step timeout and a timeout spent waiting says so. An alias
+nothing provides is a step error, because a misspelt `exclusive` must not become a lock on nothing.
+
+Per-station channels of one instrument are a driver pattern, not a framework concept: a station
+binds a channel-view driver which, in `CreateAsync`, looks the parent instrument up through the
+scope it is given - exactly as a transport looks up the instrument it runs over - and returns an
+object confined to its channel.
+
+Rebuilding after a fault is where sharing bites. `LineResourceHost.Invalidate` marks the line and
+every attached station stale, but closes nothing: the first station to run again attaches to a
+fresh generation, the others keep the old one until their own next run, and the old generation is
+disposed when its last station detaches. Exclusive leases live in one `ResourceLeaseTable` across
+generations, so two stations briefly on different handles to the same physical instrument still
+take turns.
 
 ## Results and Traceability
 

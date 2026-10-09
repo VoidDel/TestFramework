@@ -52,9 +52,11 @@ public sealed class RuntimeResourceBuilder
         ArgumentNullException.ThrowIfNull(resources);
         ArgumentNullException.ThrowIfNull(sequence);
 
+        // Creation takes turns per plugin instance across the process; see ResourceCreationGate.
         foreach (var definition in sequence.Instruments)
         {
             var plugin = _plugins.GetRequiredInstrumentDriver(definition.DriverId, definition.DriverVersion);
+            using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             resources.RegisterInstrument(
                 definition.Id,
                 await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
@@ -63,6 +65,7 @@ public sealed class RuntimeResourceBuilder
         foreach (var definition in sequence.Transports)
         {
             var plugin = _plugins.GetRequiredTransport(definition.TransportId, definition.TransportVersion);
+            using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             resources.RegisterTransport(
                 definition.Id,
                 await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
@@ -71,6 +74,7 @@ public sealed class RuntimeResourceBuilder
         foreach (var definition in sequence.Services)
         {
             var plugin = _plugins.GetRequiredService(definition.ServiceId, definition.ServiceVersion);
+            using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             resources.RegisterService(
                 definition.Id,
                 await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));

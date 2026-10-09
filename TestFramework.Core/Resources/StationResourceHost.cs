@@ -25,21 +25,32 @@ namespace TestFramework.Core.Resources;
 public sealed class StationResourceHost : IAsyncDisposable
 {
     private readonly ResourcePluginRegistry _plugins;
+    private readonly LineResourceHost? _line;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private StationConfiguration _station;
     private RuntimeResourceProvider? _session;
+    private RuntimeResourceProvider? _sessionParent;
     private bool _stale;
     private bool _disposed;
 
-    public StationResourceHost(StationConfiguration station, ResourcePluginRegistry plugins)
+    /// <param name="line">
+    /// The line this station stands on, when several stations share instruments. The station scope
+    /// nests inside the line's, so a lookup that misses here reaches the shared instrument, and the
+    /// line's <see cref="LineResourceHost.Invalidate"/> marks this station stale too.
+    /// </param>
+    public StationResourceHost(StationConfiguration station, ResourcePluginRegistry plugins, LineResourceHost? line = null)
     {
         ArgumentNullException.ThrowIfNull(station);
         ArgumentNullException.ThrowIfNull(plugins);
         _station = station;
         _plugins = plugins;
+        _line = line;
+        line?.Register(this);
     }
 
     public StationConfiguration Station => _station;
+
+    public LineResourceHost? Line => _line;
 
     /// <summary>True once a resource error has made the open resources untrustworthy.</summary>
     public bool IsStale => Volatile.Read(ref _stale);
@@ -93,7 +104,8 @@ public sealed class StationResourceHost : IAsyncDisposable
                     .PopulateAsync(run, sequence, cancellationToken)
                     .ConfigureAwait(false);
 
-                await BuildBindingsAsync(
+                await ResourceBindingBuilder.BuildAsync(
+                    _plugins,
                     run,
                     UnsharedBindingsFor(sequence),
                     cancellationToken).ConfigureAwait(false);
@@ -150,12 +162,18 @@ public sealed class StationResourceHost : IAsyncDisposable
             {
                 // Reported when it happened; nothing here can act on it.
             }
+
+            await ReleaseLineAsync().ConfigureAwait(false);
         }
 
-        var session = new RuntimeResourceProvider();
+        // Attached to the line's current generation; a line that is itself stale rebuilds here, on
+        // the first station to come back, and the others follow at their own next run.
+        var parent = _line is null ? null : await _line.AttachAsync(cancellationToken).ConfigureAwait(false);
+        var session = parent is null ? new RuntimeResourceProvider() : new RuntimeResourceProvider(parent);
         try
         {
-            await BuildBindingsAsync(
+            await ResourceBindingBuilder.BuildAsync(
+                _plugins,
                 session,
                 _station.Resources.Where(binding => binding.Shared),
                 cancellationToken).ConfigureAwait(false);
@@ -163,12 +181,27 @@ public sealed class StationResourceHost : IAsyncDisposable
         catch (Exception buildError)
         {
             await ResourceScopeCleanup.DisposeAfterFailureAsync(session, buildError).ConfigureAwait(false);
+            if (parent is not null)
+            {
+                await _line!.DetachAsync(parent).ConfigureAwait(false);
+            }
+
             throw;
         }
 
         _session = session;
+        _sessionParent = parent;
         Volatile.Write(ref _stale, false);
         return session;
+    }
+
+    private async Task ReleaseLineAsync()
+    {
+        if (_sessionParent is { } parent)
+        {
+            _sessionParent = null;
+            await _line!.DetachAsync(parent).ConfigureAwait(false);
+        }
     }
 
     private IEnumerable<StationResourceBinding> UnsharedBindingsFor(TestSequence sequence)
@@ -185,47 +218,6 @@ public sealed class StationResourceHost : IAsyncDisposable
         return _station.Resources.Where(binding => !binding.Shared && required.Contains(binding.Alias));
     }
 
-    /// <summary>
-    /// Opens bindings in dependency order - instruments, then the transports that run over them,
-    /// then the services that run over those - because a transport's driver looks its instrument up
-    /// through the scope while it builds.
-    /// </summary>
-    private async Task BuildBindingsAsync(
-        RuntimeResourceProvider target,
-        IEnumerable<StationResourceBinding> bindings,
-        CancellationToken cancellationToken)
-    {
-        var ordered = bindings.ToArray();
-        if (ordered.Length == 0)
-        {
-            return;
-        }
-
-        foreach (var binding in ordered.Where(binding => binding.Kind == ResourcePluginKind.InstrumentDriver))
-        {
-            var plugin = _plugins.GetRequiredInstrumentDriver(binding.DriverId, binding.DriverVersion);
-            target.RegisterInstrument(
-                binding.Alias,
-                await plugin.CreateAsync(binding.ToInstrumentDefinition(), target.Scope, cancellationToken).ConfigureAwait(false));
-        }
-
-        foreach (var binding in ordered.Where(binding => binding.Kind == ResourcePluginKind.Transport))
-        {
-            var plugin = _plugins.GetRequiredTransport(binding.DriverId, binding.DriverVersion);
-            target.RegisterTransport(
-                binding.Alias,
-                await plugin.CreateAsync(binding.ToTransportDefinition(), target.Scope, cancellationToken).ConfigureAwait(false));
-        }
-
-        foreach (var binding in ordered.Where(binding => binding.Kind == ResourcePluginKind.Service))
-        {
-            var plugin = _plugins.GetRequiredService(binding.DriverId, binding.DriverVersion);
-            target.RegisterService(
-                binding.Alias,
-                await plugin.CreateAsync(binding.ToServiceDefinition(), target.Scope, cancellationToken).ConfigureAwait(false));
-        }
-    }
-
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -236,11 +228,17 @@ public sealed class StationResourceHost : IAsyncDisposable
         _disposed = true;
         var session = _session;
         _session = null;
-        if (session is not null)
+        try
         {
-            await session.DisposeAsync().ConfigureAwait(false);
+            if (session is not null)
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
         }
-
-        _gate.Dispose();
+        finally
+        {
+            await ReleaseLineAsync().ConfigureAwait(false);
+            _gate.Dispose();
+        }
     }
 }

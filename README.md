@@ -306,6 +306,25 @@ var readBack = TestResultJson.Deserialize(File.ReadAllText(resultPath));
 - 排队等待计入步骤超时；因此超时的步骤会在错误信息里说明"在等另一个运行占用的插件"，而不是把锅甩给插件。
 - 被放弃的调用在插件真正返回之前一直占着队列，别的工位不会趁它还在驱动硬件时闯进去。
 - 内置步骤插件都不保存状态，均声明为线程安全。
+- 资源插件的 `CreateAsync` 在进程内按插件实例排队：两个工位同时上电时，同一个驱动不会被并发初始化。厂商 SDK 在这一点上常不可靠，而打开资源本来就不频繁。
+
+### 多工位共用一台仪器
+
+一台万用表接矩阵开关供四个工位、一台多路电源每个工位一路——这类仪器在进程里只能打开一次。为此在工位之上多一层**产线资源**（`LineResourceHost`），用和工位配置同样的格式描述：
+
+```csharp
+var line = new LineResourceHost(lineConfig, resourcePlugins);     // 整条产线一个
+var stationA = new StationResourceHost(stationAConfig, resourcePlugins, line);
+var stationB = new StationResourceHost(stationBConfig, resourcePlugins, line);
+```
+
+- 工位作用域嵌套在产线作用域之下。步骤查 `dmm` 时依次找运行级、工位级、产线级，所以序列直接 `requires: [dmm]` 即可，校验器传入产线配置后也认它。
+- **独占**：共用仪器的步骤写 `exclusive: [dmm]`，运行器在执行前拿到它的独占权、插件返回后释放。别的工位的同类步骤排队等待，等待计入步骤超时，超时信息会写明在等哪个资源。多个别名按固定顺序获取，不会死锁。插件完全不需要知道仪器是共用的。
+- **按通道拆分**：各工位要各用一路时，工位绑定一个"通道视图"驱动，它在 `CreateAsync` 里通过作用域查到产线级的母机（`resources.Instruments.GetRequired<Psu>("psu-main")`），返回只管自己那一路的对象。这正是"传输跑在仪器上"的查找方式，不需要新概念；向母机下发命令的并发由视图驱动自己处理，或者照样在步骤上写 `exclusive: [psu-main]`。
+- **故障后重建**：`line.Invalidate()` 把产线和所有工位标记为失效。谁先开始下一次运行谁重建产线资源；其他工位继续用旧的一代，直到自己下一次运行才切换，旧的一代在最后一个工位放手后释放。独占锁跨代共用，重建期间两个工位也不会同时对一台物理仪器讲话。
+- `exclusive` 写了不存在的别名，步骤判 `Error`——拼错的名字不能变成一把什么都不锁的锁。校验器对它看不见的别名给警告（产线资源常常不在校验器手里）。
+
+完整示例见 [LineResourceTests.cs](TestFramework.Tests/LineResourceTests.cs)。
 
 ## 内置步骤
 

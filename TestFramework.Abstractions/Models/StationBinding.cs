@@ -25,7 +25,20 @@ public static class StationBinding
     /// </summary>
     public static IReadOnlyList<StationBindingProblem> Check(
         IReadOnlyList<ResourceRequirement> requirements,
-        StationConfiguration? station)
+        StationConfiguration? station) => Check(requirements, station, line: null);
+
+    /// <summary>
+    /// As above, with the line's resources behind the station's: an alias the station does not
+    /// bind is satisfied by the line binding it, because a step's lookup falls through the same way.
+    /// </summary>
+    /// <param name="line">
+    /// The resources every station on the line shares - one DMM behind a switch matrix, one
+    /// multi-channel supply - described in the same shape as a station's.
+    /// </param>
+    public static IReadOnlyList<StationBindingProblem> Check(
+        IReadOnlyList<ResourceRequirement> requirements,
+        StationConfiguration? station,
+        StationConfiguration? line)
     {
         ArgumentNullException.ThrowIfNull(requirements);
 
@@ -59,7 +72,14 @@ public static class StationBinding
                 continue;
             }
 
+            var owner = station;
             var binding = station?.Find(requirement.Alias);
+            if (binding is null && line?.Find(requirement.Alias) is { } lineBinding)
+            {
+                binding = lineBinding;
+                owner = line;
+            }
+
             if (binding is null)
             {
                 var purpose = string.IsNullOrWhiteSpace(requirement.Description)
@@ -68,14 +88,14 @@ public static class StationBinding
                 problems.Add(new StationBindingProblem
                 {
                     Alias = requirement.Alias,
-                    Message = station is null
+                    Message = station is null && line is null
                         ? $"This sequence needs resource '{requirement.Alias}'{purpose}, but no station is configured."
-                        : $"Station '{StationName(station)}' has nothing bound to resource '{requirement.Alias}'{purpose}."
+                        : $"Neither station '{StationName(station)}' nor its line binds resource '{requirement.Alias}'{purpose}."
                 });
                 continue;
             }
 
-            CheckBinding(requirement, binding, station!, problems);
+            CheckBinding(requirement, binding, owner!, problems);
         }
 
         return problems;
@@ -155,8 +175,8 @@ public static class StationBinding
         }
     }
 
-    private static string StationName(StationConfiguration station) =>
-        string.IsNullOrWhiteSpace(station.Name) ? station.StationId : station.Name;
+    private static string StationName(StationConfiguration? station) =>
+        station is null ? "(none)" : string.IsNullOrWhiteSpace(station.Name) ? station.StationId : station.Name;
 
     private static string Describe(Resources.ResourcePluginKind kind) => kind switch
     {

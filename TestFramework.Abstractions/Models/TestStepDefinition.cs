@@ -27,6 +27,14 @@ public sealed class TestStepDefinition
     /// <summary>Runs the step again on Error or Fail, or until a condition holds; see <see cref="RetryDefinition"/>.</summary>
     public RetryDefinition? Retry { get; set; }
 
+    /// <summary>
+    /// Resource aliases this step needs to itself while it runs - the DMM behind a switch matrix
+    /// that four stations share. The runner holds each one exclusively for the step's duration, so
+    /// another station's step naming the same alias waits, and the plugin never has to know the
+    /// instrument is shared. Waiting counts against the step's timeout.
+    /// </summary>
+    public List<string> Exclusive { get; set; } = [];
+
     public Dictionary<string, object?> Parameters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public List<VariableWriteDefinition> VariableWrites { get; set; } = [];
@@ -44,6 +52,7 @@ public sealed class TestStepDefinition
             OnError = OnError,
             RunIf = RunIf,
             Retry = Retry?.Clone(),
+            Exclusive = [.. Exclusive],
             Parameters = Parameters.ToDictionary(
                 pair => pair.Key,
                 pair => CloneValue(pair.Value),

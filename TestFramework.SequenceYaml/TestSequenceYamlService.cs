@@ -624,6 +624,9 @@ public sealed class TestSequenceYamlService
         [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
         public YamlRetry? Retry { get; set; }
 
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitEmptyCollections | DefaultValuesHandling.OmitNull)]
+        public List<string> Exclusive { get; set; } = [];
+
         public Dictionary<string, object?> Parameters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
         public List<VariableWriteDefinition> VariableWrites { get; set; } = [];
@@ -641,6 +644,7 @@ public sealed class TestSequenceYamlService
                 OnError = ParseErrorHandling(OnError),
                 RunIf = RunIf,
                 Retry = Retry?.ToDomain(),
+                Exclusive = (Exclusive ?? []).ToList(),
                 Parameters = NormalizeDictionary(Parameters),
                 VariableWrites = VariableWrites.Select(NormalizeVariableWrite).ToList()
             };
@@ -659,6 +663,7 @@ public sealed class TestSequenceYamlService
                 OnError = FormatErrorHandling(step.OnError),
                 RunIf = string.IsNullOrWhiteSpace(step.RunIf) ? null : step.RunIf,
                 Retry = step.Retry is null ? null : YamlRetry.FromDomain(step.Retry),
+                Exclusive = step.Exclusive,
                 Parameters = step.Parameters,
                 VariableWrites = step.VariableWrites
             };

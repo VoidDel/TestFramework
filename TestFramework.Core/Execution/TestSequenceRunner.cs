@@ -851,9 +851,17 @@ public sealed class TestSequenceRunner
             return stepResult;
         }
 
-        // Set once the plugin's execution gate is held, so a timeout spent queueing behind another
-        // station can say so instead of blaming the plugin.
+        // Set as the step's exclusive leases and then the plugin's execution gate are acquired, so a
+        // timeout spent queueing behind another station can say so instead of blaming the plugin.
+        var leasesAcquired = false;
         var gateAcquired = false;
+        var scope = _resources;
+        var exclusive = step.Exclusive
+            .Where(alias => !string.IsNullOrWhiteSpace(alias))
+            .Select(alias => alias.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(alias => alias, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         try
         {
@@ -894,10 +902,33 @@ public sealed class TestSequenceRunner
             execution = Task.Run(async () =>
             {
                 effectiveToken.ThrowIfCancellationRequested();
-                using var gate = await PluginExecutionGate.EnterAsync(plugin, effectiveToken).ConfigureAwait(false);
-                gateAcquired = true;
-                var settings = plugin.LoadSettings(resolvedParameters);
-                return await plugin.ExecuteAsync(context, settings, effectiveToken).ConfigureAwait(false);
+
+                // Leases first, in one global order, then the plugin gate. A gate holder therefore
+                // never waits for a lease, and lease holders wait only for a gate whose holder is
+                // running, so two stations cannot hold one each and wait for the other's.
+                var leases = new List<IDisposable>(exclusive.Length);
+                try
+                {
+                    foreach (var alias in exclusive)
+                    {
+                        leases.Add(await scope.LeaseAsync(alias, effectiveToken).ConfigureAwait(false));
+                    }
+
+                    leasesAcquired = true;
+                    using var gate = await PluginExecutionGate.EnterAsync(plugin, effectiveToken).ConfigureAwait(false);
+                    gateAcquired = true;
+                    var settings = plugin.LoadSettings(resolvedParameters);
+                    return await plugin.ExecuteAsync(context, settings, effectiveToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    // Released when the plugin returns, not when this run stops waiting for it: an
+                    // abandoned step is still using the instrument.
+                    for (var index = leases.Count - 1; index >= 0; index--)
+                    {
+                        leases[index].Dispose();
+                    }
+                }
             }, CancellationToken.None);
             var result = await execution.WaitAsync(effectiveToken).ConfigureAwait(false);
             effectiveToken.ThrowIfCancellationRequested();
@@ -919,7 +950,9 @@ public sealed class TestSequenceRunner
         {
             var message = gateAcquired
                 ? $"Step timed out after {step.TimeoutMs} ms."
-                : $"Step timed out after {step.TimeoutMs} ms waiting for plugin '{step.PluginId}', which another run is using; it is not thread-safe, so runs take turns.";
+                : leasesAcquired
+                    ? $"Step timed out after {step.TimeoutMs} ms waiting for plugin '{step.PluginId}', which another run is using; it is not thread-safe, so runs take turns."
+                    : $"Step timed out after {step.TimeoutMs} ms waiting for exclusive use of '{string.Join(", ", exclusive)}', which another run holds.";
             return Stamped(CreateErrorResult(step, startedAt, message, ex));
         }
         catch (OperationCanceledException ex)

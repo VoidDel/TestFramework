@@ -30,6 +30,12 @@ public sealed class RuntimeResourceProvider :
     /// </summary>
     public ReadOnlyResourceScope Scope => _scope ??= new ReadOnlyResourceScope(this);
 
+    /// <summary>
+    /// The exclusive-use locks for the resources this provider owns. A host that rebuilds its
+    /// provider across generations passes the same table to each, so the lock outlives the handle.
+    /// </summary>
+    public ResourceLeaseTable Leases { get; init; } = new();
+
     private ReadOnlyResourceScope? _scope;
     private readonly bool _isReadOnly;
     private readonly RuntimeResourceProvider? _parent;
@@ -76,6 +82,29 @@ public sealed class RuntimeResourceProvider :
     {
         Register(_services, id, service);
     }
+
+    /// <summary>
+    /// Waits for exclusive use of the resource <paramref name="alias"/> names, wherever in the chain
+    /// of scopes it was opened - the lock is the owner's, so two stations whose scopes both fall
+    /// through to one line instrument contend for the same lock. An alias nothing provides is an
+    /// error rather than a free lock: a misspelt <c>exclusive</c> would otherwise protect nothing.
+    /// </summary>
+    public Task<IDisposable> LeaseAsync(string alias, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(alias);
+        for (var scope = this; scope is not null; scope = scope._parent)
+        {
+            if (scope.Owns(alias))
+            {
+                return scope.Leases.LeaseAsync(alias, cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException($"Resource '{alias}' is not available, so it cannot be used exclusively.");
+    }
+
+    private bool Owns(string alias) =>
+        _instruments.ContainsKey(alias) || _transports.ContainsKey(alias) || _services.ContainsKey(alias);
 
     T IInstrumentProvider.GetRequired<T>(string id) => GetRequired<T>(id, "instrument", TryGetInstrument);
 

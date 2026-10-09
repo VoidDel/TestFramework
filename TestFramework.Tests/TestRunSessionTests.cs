@@ -53,12 +53,12 @@ public sealed class TestRunSessionTests
         var bench = new Bench();
         var sequence = Sequence("block");
         sequence.Instruments = [new InstrumentDefinition { Id = "aux", DriverId = "demo.counting", DriverVersion = "1.0.0" }];
-        sequence.Items[0].MainSteps[0].TimeoutMs = 100;
+        sequence.Items[0].MainSteps[0].TimeoutMs = 1000; // time for the thread pool to start it
         var session = bench.Session(station: null);
 
         try
         {
-            var first = await session.RunAsync(sequence).WaitAsync(TimeSpan.FromSeconds(3));
+            var first = await session.RunAsync(sequence).WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.True(first.HasPendingExecution);
             Assert.Equal(0, bench.Driver.Instruments[0].DisposeCount);

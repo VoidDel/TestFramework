@@ -94,10 +94,10 @@ public sealed class LineResourceTests
         await line.OpenAsync();
         var dmm = bench.Driver.Instruments.Single(instrument => instrument.Alias == "dmm");
 
-        var holding = sessionA.RunAsync(Sequence(UseStep("dmm", holdMs: 1500, exclusive: ["dmm"])));
+        var holding = sessionA.RunAsync(Sequence(UseStep("dmm", holdMs: 3000, exclusive: ["dmm"])));
         await dmm.FirstUse.Task.WaitAsync(TimeSpan.FromSeconds(3));
         var impatient = UseStep("dmm", holdMs: 0, exclusive: ["dmm"]);
-        impatient.TimeoutMs = 100;
+        impatient.TimeoutMs = 500;
         impatient.OnError = ErrorHandlingMode.Continue;
         var result = await sessionB.RunAsync(Sequence(impatient));
         await holding;

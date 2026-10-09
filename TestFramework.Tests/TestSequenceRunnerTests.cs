@@ -398,13 +398,18 @@ public sealed class TestSequenceRunnerTests
         registry.Register(blocking);
         registry.Register(new ResultPlugin("pass", TestVerdict.Pass));
         var sequence = SequenceWithSingleStep("blocking", ErrorHandlingMode.Continue);
-        sequence.Items[0].MainSteps[0].TimeoutMs = 100;
+
+        // Long enough for the thread pool to start the plugin before the timeout. With 100 ms a
+        // cold CI runner sometimes timed the step out before it began, and a plugin that never
+        // ran has nothing pending - correct, and not what this test is about.
+        sequence.Items[0].MainSteps[0].TimeoutMs = 1000;
         sequence.Items[0].MainSteps.Add(Step("next", "pass", ErrorHandlingMode.Stop));
         sequence.Items[0].CleanupSteps.Add(Step("cleanup", "pass", ErrorHandlingMode.Stop));
         var runner = new TestSequenceRunner(registry);
         try
         {
-            var result = await runner.RunAsync(sequence).WaitAsync(TimeSpan.FromSeconds(3));
+            var result = await runner.RunAsync(sequence).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(blocking.Started.Task.IsCompleted, "the plugin never started, so there was nothing to abandon");
             Assert.Equal(TestVerdict.Error, result.Verdict);
             Assert.True(result.HasPendingExecution);
             Assert.False(runner.PendingStepsCompletion.IsCompleted);

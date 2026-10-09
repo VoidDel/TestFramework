@@ -851,10 +851,10 @@ public sealed class TestSequenceRunner
             return stepResult;
         }
 
-        // Set as the step's exclusive leases and then the plugin's execution gate are acquired, so a
-        // timeout spent queueing behind another station can say so instead of blaming the plugin.
-        var leasesAcquired = false;
-        var gateAcquired = false;
+        // How far the execution got, so a timeout spent queueing behind another station can say so
+        // instead of blaming the plugin - and, just as much, so one that expired before the step was
+        // even scheduled (a busy machine) does not claim to have been waiting for anything.
+        var stage = ExecutionStage.NotStarted;
         var scope = _resources;
         var exclusive = step.Exclusive
             .Where(alias => !string.IsNullOrWhiteSpace(alias))
@@ -908,12 +908,13 @@ public sealed class TestSequenceRunner
                 // wait only for a gate whose holder is running, so two stations cannot hold one each
                 // and wait for the other's. Released when the plugin returns, not when this run stops
                 // waiting for it: an abandoned step is still using the instrument.
+                stage = ExecutionStage.WaitingForLeases;
                 using var leases = exclusive.Length == 0
                     ? null
                     : await scope.LeaseAsync(exclusive, effectiveToken).ConfigureAwait(false);
-                leasesAcquired = true;
+                stage = ExecutionStage.WaitingForGate;
                 using var gate = await PluginExecutionGate.EnterAsync(plugin, effectiveToken).ConfigureAwait(false);
-                gateAcquired = true;
+                stage = ExecutionStage.Running;
                 var settings = plugin.LoadSettings(resolvedParameters);
                 return await plugin.ExecuteAsync(context, settings, effectiveToken).ConfigureAwait(false);
             }, CancellationToken.None);
@@ -935,11 +936,14 @@ public sealed class TestSequenceRunner
             timeoutCts?.IsCancellationRequested == true &&
             ex.CancellationToken == timeoutCts.Token)
         {
-            var message = gateAcquired
-                ? $"Step timed out after {step.TimeoutMs} ms."
-                : leasesAcquired
-                    ? $"Step timed out after {step.TimeoutMs} ms waiting for plugin '{step.PluginId}', which another run is using; it is not thread-safe, so runs take turns."
-                    : $"Step timed out after {step.TimeoutMs} ms waiting for exclusive use of '{string.Join(", ", exclusive)}', which another run holds.";
+            var message = stage switch
+            {
+                ExecutionStage.WaitingForLeases when exclusive.Length > 0 =>
+                    $"Step timed out after {step.TimeoutMs} ms waiting for exclusive use of '{string.Join(", ", exclusive)}', which another run holds.",
+                ExecutionStage.WaitingForGate =>
+                    $"Step timed out after {step.TimeoutMs} ms waiting for plugin '{step.PluginId}', which another run is using; it is not thread-safe, so runs take turns.",
+                _ => $"Step timed out after {step.TimeoutMs} ms."
+            };
             return Stamped(CreateErrorResult(step, startedAt, message, ex));
         }
         catch (OperationCanceledException ex)
@@ -1543,6 +1547,15 @@ public sealed class TestSequenceRunner
         }
 
         return false;
+    }
+
+    /// <summary>How far a step's execution got before it finished or was abandoned.</summary>
+    private enum ExecutionStage
+    {
+        NotStarted,
+        WaitingForLeases,
+        WaitingForGate,
+        Running
     }
 
     private enum FlowDecision

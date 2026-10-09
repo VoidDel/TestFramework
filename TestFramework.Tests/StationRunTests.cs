@@ -95,10 +95,10 @@ public sealed class StationRunTests
         {
             var stuck = SequenceReading("psu");
             stuck.Items[0].MainSteps[0].PluginId = "demo.blocking";
-            stuck.Items[0].MainSteps[0].TimeoutMs = 100;
+            stuck.Items[0].MainSteps[0].TimeoutMs = 1000; // time for the thread pool to start it
 
             var firstScope = await host.BeginRunAsync(stuck);
-            var first = await runner.RunAsync(stuck, firstScope).WaitAsync(TimeSpan.FromSeconds(3));
+            var first = await runner.RunAsync(stuck, firstScope).WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.True(first.HasPendingExecution);
             Assert.False(runner.PendingStepsCompletion.IsCompleted);

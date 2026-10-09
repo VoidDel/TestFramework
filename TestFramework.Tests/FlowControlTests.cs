@@ -350,13 +350,13 @@ public sealed class FlowControlTests
     [Fact]
     public async Task TimeoutWaitingForASharedPlugin_SaysWhatItWaitedFor()
     {
-        var plugin = new OverlapPlugin(threadSafe: false, holdMs: 1000);
+        var plugin = new OverlapPlugin(threadSafe: false, holdMs: 3000);
         var registry = new PluginRegistry();
         registry.Register(plugin);
         var slow = new TestSequence { Items = [Item("item", new TestStepDefinition { Id = "s", Name = "s", PluginId = "probe.overlap" })] };
         var impatient = new TestSequence
         {
-            Items = [Item("item", new TestStepDefinition { Id = "s", Name = "s", PluginId = "probe.overlap", TimeoutMs = 100, OnError = ErrorHandlingMode.Continue })]
+            Items = [Item("item", new TestStepDefinition { Id = "s", Name = "s", PluginId = "probe.overlap", TimeoutMs = 500, OnError = ErrorHandlingMode.Continue })]
         };
 
         var first = new TestSequenceRunner(registry).RunAsync(slow);

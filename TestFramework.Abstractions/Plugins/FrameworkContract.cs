@@ -16,7 +16,7 @@ namespace TestFramework.Abstractions.Plugins;
 /// </summary>
 public static class FrameworkContract
 {
-    public static Version Version { get; } = new(1, 0);
+    public static Version Version { get; } = new(1, 1);
 
     /// <summary>The contract assumed for a plugin assembly that declares none.</summary>
     public static Version Baseline { get; } = new(1, 0);

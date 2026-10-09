@@ -18,6 +18,15 @@ public sealed class TestStepDefinition
 
     public ErrorHandlingMode OnError { get; set; } = ErrorHandlingMode.Stop;
 
+    /// <summary>
+    /// A condition that must be true for the step to run, evaluated just before it would; false
+    /// records the step as skipped. Null always runs.
+    /// </summary>
+    public string? RunIf { get; set; }
+
+    /// <summary>Runs the step again on Error or Fail, or until a condition holds; see <see cref="RetryDefinition"/>.</summary>
+    public RetryDefinition? Retry { get; set; }
+
     public Dictionary<string, object?> Parameters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public List<VariableWriteDefinition> VariableWrites { get; set; } = [];
@@ -33,6 +42,8 @@ public sealed class TestStepDefinition
             Enabled = Enabled,
             TimeoutMs = TimeoutMs,
             OnError = OnError,
+            RunIf = RunIf,
+            Retry = Retry?.Clone(),
             Parameters = Parameters.ToDictionary(
                 pair => pair.Key,
                 pair => CloneValue(pair.Value),

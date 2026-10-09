@@ -25,4 +25,11 @@ public sealed class TestStepExecutionContext
     public ITestServiceProvider Services { get; init; } = EmptyResourceScope.Instance;
 
     public Action<string>? Log { get; init; }
+
+    /// <summary>
+    /// Asks the operator; see <see cref="IOperatorInteraction"/>. Requires framework contract 1.1:
+    /// a plugin using it declares <c>[assembly: TestFrameworkPlugin("1.1")]</c>, so a 1.0 host
+    /// refuses it at load instead of failing with a missing member mid-run.
+    /// </summary>
+    public IOperatorInteraction Operator { get; init; } = NoOperatorInteraction.Instance;
 }

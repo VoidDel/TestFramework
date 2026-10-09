@@ -8,6 +8,13 @@ public sealed class TestSequence
 
     public string Name { get; set; } = "New Test Sequence";
 
+    /// <summary>
+    /// The sequence's own revision, as its authors number it ("2.3", "B04"). Copied into every run
+    /// result, so a result says which revision of the test produced it. Null when not numbered; the
+    /// file hash a host records answers the same question exactly.
+    /// </summary>
+    public string? Version { get; set; }
+
     public Dictionary<string, object?> Variables { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

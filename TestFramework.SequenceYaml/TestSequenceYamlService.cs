@@ -81,6 +81,18 @@ public sealed class TestSequenceYamlService
         return _serializer.Serialize(YamlTestSequence.FromDomain(sequence));
     }
 
+    /// <summary>
+    /// A digest of a sequence file's exact text, for <c>TestRunInfo.SequenceHash</c>:
+    /// <c>sha256:</c> and 64 hex digits. Of the text as read, not of the loaded model - an edit that
+    /// changes only spacing is still a different file, and the point is to identify the bytes.
+    /// </summary>
+    public static string ComputeHash(string yaml)
+    {
+        ArgumentNullException.ThrowIfNull(yaml);
+        var digest = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(yaml));
+        return "sha256:" + Convert.ToHexStringLower(digest);
+    }
+
     private static void EnsureSupportedSchema(int version)
     {
         if (version != 1) throw new InvalidDataException($"Unsupported sequence schemaVersion '{version}'. Expected 1.");
@@ -149,6 +161,9 @@ public sealed class TestSequenceYamlService
 
         public string Name { get; set; } = "New Test Sequence";
 
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public string? Version { get; set; }
+
         public Dictionary<string, object?> Variables { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
         public List<YamlResourceRequirement> Requires { get; set; } = [];
@@ -168,6 +183,7 @@ public sealed class TestSequenceYamlService
                 SchemaVersion = SchemaVersion,
                 Id = Id,
                 Name = Name,
+                Version = Version,
                 Variables = NormalizeDictionary(Variables),
                 Requires = Requires.Select(requirement => requirement.ToDomain()).ToList(),
                 Instruments = Instruments.Select(instrument => instrument.ToDomain()).ToList(),
@@ -184,6 +200,7 @@ public sealed class TestSequenceYamlService
                 SchemaVersion = sequence.SchemaVersion,
                 Id = sequence.Id,
                 Name = sequence.Name,
+                Version = string.IsNullOrWhiteSpace(sequence.Version) ? null : sequence.Version,
                 Variables = sequence.Variables,
                 Requires = sequence.Requires.Select(YamlResourceRequirement.FromDomain).ToList(),
                 Instruments = sequence.Instruments.Select(YamlInstrument.FromDomain).ToList(),
@@ -350,13 +367,40 @@ public sealed class TestSequenceYamlService
 
         public bool Enabled { get; set; } = true;
 
-        public VerdictSource VerdictSource { get; set; } = new();
+        // The flow members are omitted while unset, so an item that uses none of them saves exactly
+        // as it did before they existed.
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public string? RunIf { get; set; }
 
-        public List<YamlTestStep> Init { get; set; } = [];
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public YamlLoop? Loop { get; set; }
 
-        public List<YamlTestStep> Main { get; set; } = [];
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public YamlRetry? Retry { get; set; }
 
-        public List<YamlTestStep> Cleanup { get; set; } = [];
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public YamlCall? Call { get; set; }
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitEmptyCollections | DefaultValuesHandling.OmitNull)]
+        public List<YamlTestItem> Items { get; set; } = [];
+
+        // A group or a call has no verdict source and no steps; writing empty ones for it would
+        // read as an item someone forgot to fill in. Null omits them; an ordinary item always has them.
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public YamlVerdictSource? VerdictSource { get; set; } = new();
+
+        // Omitted when empty, so an item without checks saves exactly as it did before they existed.
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitEmptyCollections | DefaultValuesHandling.OmitNull)]
+        public List<YamlVerdictSource> Checks { get; set; } = [];
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public List<YamlTestStep>? Init { get; set; } = [];
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public List<YamlTestStep>? Main { get; set; } = [];
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public List<YamlTestStep>? Cleanup { get; set; } = [];
 
         public TestItemDefinition ToDomain()
         {
@@ -365,24 +409,195 @@ public sealed class TestSequenceYamlService
                 Id = Id,
                 Name = Name,
                 Enabled = Enabled,
-                VerdictSource = VerdictSource ?? new VerdictSource(),
-                InitSteps = Init.Select(step => step.ToDomain()).ToList(),
-                MainSteps = Main.Select(step => step.ToDomain()).ToList(),
-                CleanupSteps = Cleanup.Select(step => step.ToDomain()).ToList()
+                RunIf = RunIf,
+                Loop = Loop?.ToDomain(),
+                Retry = Retry?.ToDomain(),
+                Call = Call?.ToDomain(),
+                Items = (Items ?? []).Select(child => child.ToDomain()).ToList(),
+                VerdictSource = (VerdictSource ?? new YamlVerdictSource()).ToDomain(),
+                Checks = (Checks ?? []).Select(check => (check ?? new YamlVerdictSource()).ToDomain()).ToList(),
+                InitSteps = (Init ?? []).Select(step => step.ToDomain()).ToList(),
+                MainSteps = (Main ?? []).Select(step => step.ToDomain()).ToList(),
+                CleanupSteps = (Cleanup ?? []).Select(step => step.ToDomain()).ToList()
             };
         }
 
         public static YamlTestItem FromDomain(TestItemDefinition item)
         {
+            var container = item.IsGroup || item.IsCall;
             return new YamlTestItem
             {
                 Id = item.Id,
                 Name = item.Name,
                 Enabled = item.Enabled,
-                VerdictSource = item.VerdictSource,
-                Init = item.InitSteps.Select(YamlTestStep.FromDomain).ToList(),
-                Main = item.MainSteps.Select(YamlTestStep.FromDomain).ToList(),
-                Cleanup = item.CleanupSteps.Select(YamlTestStep.FromDomain).ToList()
+                RunIf = string.IsNullOrWhiteSpace(item.RunIf) ? null : item.RunIf,
+                Loop = item.Loop is null ? null : YamlLoop.FromDomain(item.Loop),
+                Retry = item.Retry is null ? null : YamlRetry.FromDomain(item.Retry),
+                Call = item.Call is null ? null : YamlCall.FromDomain(item.Call),
+                Items = item.Items.Select(FromDomain).ToList(),
+                VerdictSource = container ? null : YamlVerdictSource.FromDomain(item.VerdictSource),
+                Checks = item.Checks.Select(YamlVerdictSource.FromDomain).ToList(),
+                Init = container && item.InitSteps.Count == 0 ? null : item.InitSteps.Select(YamlTestStep.FromDomain).ToList(),
+                Main = container && item.MainSteps.Count == 0 ? null : item.MainSteps.Select(YamlTestStep.FromDomain).ToList(),
+                Cleanup = container && item.CleanupSteps.Count == 0 ? null : item.CleanupSteps.Select(YamlTestStep.FromDomain).ToList()
+            };
+        }
+    }
+
+    private sealed class YamlLoop
+    {
+        /// <summary>A number or an expression; YAML hands a bare number over as one, kept as its text.</summary>
+        public object? Count { get; set; }
+
+        public string Variable { get; set; } = "loopIndex";
+
+        public LoopDefinition ToDomain() => new()
+        {
+            Count = Convert.ToString(Count, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            Variable = Variable
+        };
+
+        public static YamlLoop FromDomain(LoopDefinition loop) => new()
+        {
+            // A plain number is written back as one, so `count: 16` does not become `count: '16'`.
+            Count = int.TryParse(loop.Count, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number)
+                ? number
+                : loop.Count,
+            Variable = loop.Variable
+        };
+    }
+
+    private sealed class YamlRetry
+    {
+        public int MaxAttempts { get; set; } = 1;
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
+        public int IntervalMs { get; set; }
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public string? Until { get; set; }
+
+        public RetryDefinition ToDomain() => new() { MaxAttempts = MaxAttempts, IntervalMs = IntervalMs, Until = Until };
+
+        public static YamlRetry FromDomain(RetryDefinition retry) => new()
+        {
+            MaxAttempts = retry.MaxAttempts,
+            IntervalMs = retry.IntervalMs,
+            Until = string.IsNullOrWhiteSpace(retry.Until) ? null : retry.Until
+        };
+    }
+
+    private sealed class YamlCall
+    {
+        public string Path { get; set; } = string.Empty;
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitEmptyCollections | DefaultValuesHandling.OmitNull)]
+        public Dictionary<string, object?> Parameters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public SequenceCallDefinition ToDomain() => new() { Path = Path, Parameters = NormalizeDictionary(Parameters) };
+
+        public static YamlCall FromDomain(SequenceCallDefinition call) => new() { Path = call.Path, Parameters = call.Parameters };
+    }
+
+    /// <summary>
+    /// The file shape of <see cref="TestFramework.Abstractions.Models.VerdictSource"/>. Members are
+    /// in the model's order so the saved layout does not move.
+    ///
+    /// <c>lowerLimit</c> and <c>upperLimit</c> hold either a number or a <c>${variable}</c>, which
+    /// the model keeps in two members. Anything else that is text - <c>abc</c>, <c>${1st}</c>,
+    /// <c>.nan</c> - is kept as the reference too, so the file still opens, the validator says what
+    /// is wrong with it, and saving writes back exactly what was read. <c>expected</c> works the same.
+    ///
+    /// The members added with comparisons and checks - <c>name</c>, <c>comparison</c>,
+    /// <c>expected</c> - are omitted while they hold their defaults, so a file that does not use
+    /// them saves byte for byte as it did before they existed, and a sequence under version control
+    /// does not change on its first save.
+    /// </summary>
+    private sealed class YamlVerdictSource
+    {
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public string? Name { get; set; }
+
+        public string? StepId { get; set; }
+
+        public string? OutputKey { get; set; }
+
+        public VerdictJudgeType JudgeType { get; set; } = VerdictJudgeType.PassFail;
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
+        public NumericComparison Comparison { get; set; } = NumericComparison.GELE;
+
+        public object? LowerLimit { get; set; }
+
+        public object? UpperLimit { get; set; }
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public object? Expected { get; set; }
+
+        public string? SourceUnit { get; set; }
+
+        public string? Unit { get; set; }
+
+        public StringJudgeMode StringMode { get; set; } = StringJudgeMode.Exact;
+
+        public string? ExpectedString { get; set; }
+
+        public VerdictSource ToDomain()
+        {
+            var (lower, lowerReference) = SplitLimit(LowerLimit, "lowerLimit");
+            var (upper, upperReference) = SplitLimit(UpperLimit, "upperLimit");
+            var (expected, expectedReference) = SplitLimit(Expected, "expected");
+            return new VerdictSource
+            {
+                Name = Name,
+                StepId = StepId,
+                OutputKey = OutputKey,
+                JudgeType = JudgeType,
+                Comparison = Comparison,
+                LowerLimit = lower,
+                UpperLimit = upper,
+                LowerLimitReference = lowerReference,
+                UpperLimitReference = upperReference,
+                Expected = expected,
+                ExpectedReference = expectedReference,
+                SourceUnit = SourceUnit,
+                Unit = Unit,
+                StringMode = StringMode,
+                ExpectedString = ExpectedString
+            };
+        }
+
+        public static YamlVerdictSource FromDomain(VerdictSource source)
+        {
+            return new YamlVerdictSource
+            {
+                Name = string.IsNullOrWhiteSpace(source.Name) ? null : source.Name,
+                StepId = source.StepId,
+                OutputKey = source.OutputKey,
+                JudgeType = source.JudgeType,
+                Comparison = source.Comparison,
+                LowerLimit = string.IsNullOrWhiteSpace(source.LowerLimitReference) ? source.LowerLimit : source.LowerLimitReference,
+                UpperLimit = string.IsNullOrWhiteSpace(source.UpperLimitReference) ? source.UpperLimit : source.UpperLimitReference,
+                Expected = string.IsNullOrWhiteSpace(source.ExpectedReference) ? source.Expected : source.ExpectedReference,
+                SourceUnit = source.SourceUnit,
+                Unit = source.Unit,
+                StringMode = source.StringMode,
+                ExpectedString = source.ExpectedString
+            };
+        }
+
+        private static (double? Literal, string? Reference) SplitLimit(object? value, string field)
+        {
+            return value switch
+            {
+                null => (null, null),
+                string text when NumericValue.TryRead(text, out var number) => (number, null),
+                string text => (null, text),
+                // Kept even when not finite (1e999), so the validator reports it as before.
+                double number => (number, null),
+                _ when NumericValue.TryRead(value, out var number) => (number, null),
+                _ => throw new InvalidDataException(
+                    $"Verdict {field} must be a number or a ${{variable}} reference, but is '{value}'.")
             };
         }
     }
@@ -403,6 +618,12 @@ public sealed class TestSequenceYamlService
 
         public string OnError { get; set; } = "stop";
 
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public string? RunIf { get; set; }
+
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public YamlRetry? Retry { get; set; }
+
         public Dictionary<string, object?> Parameters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
         public List<VariableWriteDefinition> VariableWrites { get; set; } = [];
@@ -418,6 +639,8 @@ public sealed class TestSequenceYamlService
                 Enabled = Enabled,
                 TimeoutMs = TimeoutMs,
                 OnError = ParseErrorHandling(OnError),
+                RunIf = RunIf,
+                Retry = Retry?.ToDomain(),
                 Parameters = NormalizeDictionary(Parameters),
                 VariableWrites = VariableWrites.Select(NormalizeVariableWrite).ToList()
             };
@@ -434,6 +657,8 @@ public sealed class TestSequenceYamlService
                 Enabled = step.Enabled,
                 TimeoutMs = step.TimeoutMs,
                 OnError = FormatErrorHandling(step.OnError),
+                RunIf = string.IsNullOrWhiteSpace(step.RunIf) ? null : step.RunIf,
+                Retry = step.Retry is null ? null : YamlRetry.FromDomain(step.Retry),
                 Parameters = step.Parameters,
                 VariableWrites = step.VariableWrites
             };

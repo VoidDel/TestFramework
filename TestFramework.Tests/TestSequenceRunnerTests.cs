@@ -112,6 +112,59 @@ public sealed class TestSequenceRunnerTests
     }
 
     [Theory]
+    [InlineData(StepSection.Init)]
+    [InlineData(StepSection.Main)]
+    [InlineData(StepSection.Cleanup)]
+    public async Task RunAsync_FailOutsideTheVerdictSource_FailsTheItem(StepSection section)
+    {
+        // The verdict source passing must not hide another step's Fail: two limit checks in one
+        // item would otherwise report a unit that failed the first one as good.
+        var registry = new PluginRegistry();
+        registry.Register(new ResultPlugin("pass", TestVerdict.Pass));
+        registry.Register(new ResultPlugin("fail", TestVerdict.Fail));
+        var item = new TestItemDefinition
+        {
+            Name = "Item",
+            MainSteps = [Step("verdict", "pass", ErrorHandlingMode.Stop)],
+            VerdictSource = new VerdictSource { StepId = "verdict" }
+        };
+        var failing = Step("failing", "fail", ErrorHandlingMode.Stop);
+        switch (section)
+        {
+            case StepSection.Init: item.InitSteps.Add(failing); break;
+            case StepSection.Main: item.MainSteps.Insert(0, failing); break;
+            case StepSection.Cleanup: item.CleanupSteps.Add(failing); break;
+        }
+
+        var result = await new TestSequenceRunner(registry).RunAsync(new TestSequence { Items = [item] });
+
+        Assert.Equal(TestVerdict.Fail, Assert.Single(result.ItemResults).Verdict);
+        Assert.Equal(TestVerdict.Fail, result.Verdict);
+    }
+
+    [Fact]
+    public async Task RunAsync_ConfiguredOutputVerdict_StillReplacesTheSourceStepsOwnVerdict()
+    {
+        // Excluding the source step from the Fail rule is deliberate: judging its output is what the
+        // item asked for, so the step's own verdict is superseded - other steps' are not.
+        var registry = new PluginRegistry();
+        registry.Register(new OutputPlugin("measure", 5.0, TestVerdict.Fail));
+        var sequence = SequenceWithSingleStep("measure", ErrorHandlingMode.Stop);
+        sequence.Items[0].VerdictSource = new VerdictSource
+        {
+            StepId = "main",
+            OutputKey = "value",
+            JudgeType = VerdictJudgeType.Numeric,
+            LowerLimit = 4.8,
+            UpperLimit = 5.2
+        };
+
+        var result = await new TestSequenceRunner(registry).RunAsync(sequence);
+
+        Assert.Equal(TestVerdict.Pass, Assert.Single(result.ItemResults).Verdict);
+    }
+
+    [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
     [InlineData(double.NegativeInfinity)]

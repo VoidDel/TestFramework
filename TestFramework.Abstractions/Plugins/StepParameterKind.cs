@@ -15,5 +15,16 @@ public enum StepParameterKind
     Number,
     Boolean,
     /// <summary>One of <see cref="StepParameterDescriptor.Choices"/>, compared as a string.</summary>
-    Enum
+    Enum,
+
+    /// <summary>
+    /// A <c>SequenceExpression</c> the plugin evaluates itself, such as <c>max(${cells}) - min(${cells})</c>.
+    ///
+    /// The runner does not substitute variables into it: the <c>${}</c> are the expression's
+    /// operands, and replacing a list with its text would destroy them. The plugin receives the
+    /// text and evaluates it against <c>TestStepExecutionContext.Variables</c>; the validator
+    /// checks that it parses and that its variables exist. Added in framework contract 1.1 - a
+    /// host built before it renders such a parameter as plain text.
+    /// </summary>
+    Expression
 }

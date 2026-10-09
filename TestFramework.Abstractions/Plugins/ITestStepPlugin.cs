@@ -7,9 +7,10 @@ public interface ITestStepPlugin
     // One instance per registered plugin, reused by every step that names it and by every run.
     // A single TestSequenceRunner executes its own steps one at a time, and refuses to start a run
     // while a previous run's plugin has not exited - but only a runner that the host keeps across
-    // runs can refuse that, and nothing above it serializes anything. A host driving several
-    // runners at once must supply thread-safe plugins. See TestSequenceRunner.PendingStepsCompletion
-    // for the protocol a host owes a plugin instance that has not yet exited.
+    // runs can refuse that. Across runners - one per station, running at once - calls into a plugin
+    // that does not declare IsThreadSafe are serialised process-wide, including a call still running
+    // after its runner abandoned it. See TestSequenceRunner.PendingStepsCompletion for the protocol a
+    // host owes a plugin instance that has not yet exited.
     TestStepPluginDescriptor Descriptor { get; }
 
     Type SettingsType { get; }
@@ -28,6 +29,17 @@ public interface ITestStepPlugin
     /// defaults it applies when a key is absent.
     /// </summary>
     IReadOnlyList<StepParameterDescriptor> Parameters => [];
+
+    /// <summary>
+    /// Whether this instance may run for two stations at once.
+    ///
+    /// False - the default - is the safe answer for a plugin nobody has thought about: the runner
+    /// then serialises every call into it across every runner in the process, so several stations
+    /// can share one host and one plugin without the plugin having been written for it. A plugin
+    /// holding no state between calls, or guarding its own, returns true and runs concurrently.
+    /// Added in framework contract 1.1; a plugin built against 1.0 gets the default.
+    /// </summary>
+    bool IsThreadSafe => false;
 
     object CreateDefaultSettings();
 

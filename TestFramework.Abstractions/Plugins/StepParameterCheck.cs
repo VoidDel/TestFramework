@@ -1,4 +1,5 @@
 using System.Globalization;
+using TestFramework.Abstractions.Expressions;
 using TestFramework.Abstractions.Models;
 
 namespace TestFramework.Abstractions.Plugins;
@@ -118,6 +119,14 @@ public static class StepParameterCheck
             return;
         }
 
+        // An expression is not substituted - its ${} are its own operands - so it is checked by
+        // parsing it, not as a reference.
+        if (descriptor.Kind == StepParameterKind.Expression)
+        {
+            CheckExpression(descriptor, value, variables, problems);
+            return;
+        }
+
         if (VariableReference.IsReference(value))
         {
             CheckVariableReference(descriptor, value, variables, problems);
@@ -159,6 +168,31 @@ public static class StepParameterCheck
                 break;
             case StepParameterKind.String:
                 break;
+        }
+    }
+
+    private static void CheckExpression(
+        StepParameterDescriptor descriptor,
+        object value,
+        Dictionary<string, object?>? variables,
+        ICollection<StepParameterProblem> problems)
+    {
+        if (!SequenceExpression.TryParse(Describe(value), out var expression, out var error))
+        {
+            problems.Add(Problem(descriptor, $"Parameter '{descriptor.Label}' is not a valid expression: {error}"));
+            return;
+        }
+
+        if (variables is null)
+        {
+            return;
+        }
+
+        foreach (var name in expression!.VariableNames.Where(name => !variables.ContainsKey(name)))
+        {
+            problems.Add(Problem(
+                descriptor,
+                $"Parameter '{descriptor.Label}' references variable '{name}', which is not defined."));
         }
     }
 
@@ -304,34 +338,10 @@ public static class StepParameterCheck
     }
 
     /// <summary>
-    /// Accepts the numeric shapes a YAML file and an editor actually produce. A value typed into a
-    /// text box arrives as a string, and YAML gives back long or double depending on how the number
-    /// was written; refusing those would report errors on sequences that run correctly.
+    /// Accepts the numeric shapes a YAML file and an editor actually produce; see
+    /// <see cref="NumericValue"/>, which verdict limits share.
     /// </summary>
-    private static bool TryAsDouble(object value, out double number)
-    {
-        switch (value)
-        {
-            case double existing:
-                number = existing;
-                return double.IsFinite(existing);
-            case float existing:
-                number = existing;
-                return float.IsFinite(existing);
-            case int or long or short or byte or uint or ulong or ushort or sbyte:
-                number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
-                return true;
-            case decimal existing:
-                number = (double)existing;
-                return true;
-            case string text:
-                return double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out number)
-                    && double.IsFinite(number);
-            default:
-                number = 0;
-                return false;
-        }
-    }
+    private static bool TryAsDouble(object value, out double number) => NumericValue.TryRead(value, out number);
 
     private static bool TryAsBoolean(object value, out bool result)
     {

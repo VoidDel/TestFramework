@@ -1,3 +1,5 @@
+using TestFramework.Abstractions.Execution;
+using TestFramework.Abstractions.Expressions;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.Abstractions.Resources;
@@ -9,15 +11,23 @@ public sealed class TestSequenceValidator
     private readonly IPluginRegistry? _pluginRegistry;
     private readonly IResourcePluginCatalog? _resourcePlugins;
     private readonly StationConfiguration? _station;
+    private readonly ISequenceResolver? _sequences;
 
+    /// <param name="sequences">
+    /// Resolves the sequences calls name, so a call to a file that does not exist - or with a
+    /// parameter its target does not declare - is reported before the run. Without it, calls are
+    /// checked only for what is visible in this file.
+    /// </param>
     public TestSequenceValidator(
         IPluginRegistry? pluginRegistry = null,
         IResourcePluginCatalog? resourcePlugins = null,
-        StationConfiguration? station = null)
+        StationConfiguration? station = null,
+        ISequenceResolver? sequences = null)
     {
         _pluginRegistry = pluginRegistry;
         _resourcePlugins = resourcePlugins;
         _station = station;
+        _sequences = sequences;
     }
 
     public IReadOnlyList<ValidationIssue> Validate(TestSequence sequence)
@@ -64,42 +74,341 @@ public sealed class TestSequenceValidator
     {
         var defined = new Dictionary<string, object?>(knownVariables, StringComparer.OrdinalIgnoreCase);
         var itemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ValidateItemList(items, "items", defined, itemIds, issues);
+    }
+
+    /// <summary>
+    /// Items in execution order, a group's children in place: the tree runs depth first, so that is
+    /// the order variables become defined in. Ids are unique across the whole tree, because a
+    /// result names an item by its id and a report cannot tell two of the same apart.
+    /// </summary>
+    private void ValidateItemList(
+        IReadOnlyList<TestItemDefinition> items,
+        string listPath,
+        Dictionary<string, object?> defined,
+        ISet<string> itemIds,
+        ICollection<ValidationIssue> issues)
+    {
         for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
         {
-            var item = items[itemIndex];
-            var itemPath = $"items[{itemIndex}]";
-
-            ValidateId(item.Id, itemPath, "Test item ID", itemIds, issues);
-
-            if (string.IsNullOrWhiteSpace(item.Name))
-            {
-                issues.Add(new ValidationIssue { Path = $"{itemPath}.name", Message = "Test item name is required." });
-            }
-
-            if (item.MainSteps.Count == 0)
-            {
-                issues.Add(new ValidationIssue { Path = $"{itemPath}.main", Message = "Main steps are required." });
-            }
-
-            if (string.IsNullOrWhiteSpace(item.VerdictSource.StepId))
-            {
-                issues.Add(new ValidationIssue { Path = $"{itemPath}.verdictSource.stepId", Message = "Verdict source step is required." });
-            }
-            else if (item.MainSteps.All(step => !string.Equals(step.Id, item.VerdictSource.StepId, StringComparison.OrdinalIgnoreCase)))
-            {
-                issues.Add(new ValidationIssue { Path = $"{itemPath}.verdictSource.stepId", Message = "Verdict source step must be in main steps." });
-            }
-
-            ValidateVerdictSource(item.VerdictSource, $"{itemPath}.verdictSource", issues);
-
-            var stepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, defined, issues);
-            ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, defined, issues);
-            ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, defined, issues);
+            ValidateItem(items[itemIndex], $"{listPath}[{itemIndex}]", defined, itemIds, issues);
         }
     }
 
-    private static void ValidateVerdictSource(VerdictSource source, string path, ICollection<ValidationIssue> issues)
+    private void ValidateItem(
+        TestItemDefinition item,
+        string itemPath,
+        Dictionary<string, object?> defined,
+        ISet<string> itemIds,
+        ICollection<ValidationIssue> issues)
+    {
+        ValidateId(item.Id, itemPath, "Test item ID", itemIds, issues);
+
+        if (string.IsNullOrWhiteSpace(item.Name))
+        {
+            issues.Add(new ValidationIssue { Path = $"{itemPath}.name", Message = "Test item name is required." });
+        }
+
+        ValidateExpression(item.RunIf, $"{itemPath}.runIf", "runIf", defined, issues);
+        if (item.Loop is { } loop)
+        {
+            ValidateLoop(loop, $"{itemPath}.loop", defined, issues);
+        }
+
+        if (item.IsGroup || item.IsCall)
+        {
+            ValidateContainer(item, itemPath, defined, itemIds, issues);
+        }
+        else
+        {
+            ValidateTestItem(item, itemPath, defined, issues);
+        }
+
+        // Last: an until is evaluated after the attempt, when everything the item wrote exists.
+        if (item.Retry is { } retry)
+        {
+            ValidateRetry(retry, $"{itemPath}.retry", defined, issues);
+        }
+    }
+
+    private void ValidateTestItem(
+        TestItemDefinition item,
+        string itemPath,
+        Dictionary<string, object?> defined,
+        ICollection<ValidationIssue> issues)
+    {
+        if (item.MainSteps.Count == 0)
+        {
+            issues.Add(new ValidationIssue { Path = $"{itemPath}.main", Message = "Main steps are required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(item.VerdictSource.StepId))
+        {
+            issues.Add(new ValidationIssue { Path = $"{itemPath}.verdictSource.stepId", Message = "Verdict source step is required." });
+        }
+        else if (item.MainSteps.All(step => !string.Equals(step.Id, item.VerdictSource.StepId, StringComparison.OrdinalIgnoreCase)))
+        {
+            issues.Add(new ValidationIssue { Path = $"{itemPath}.verdictSource.stepId", Message = "Verdict source step must be in main steps." });
+        }
+
+        var stepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ValidateSteps(item.InitSteps, $"{itemPath}.init", stepIds, defined, issues);
+        ValidateSteps(item.MainSteps, $"{itemPath}.main", stepIds, defined, issues);
+        ValidateSteps(item.CleanupSteps, $"{itemPath}.cleanup", stepIds, defined, issues);
+
+        // After the item's steps: the runner judges the item once they have all run, so a limit
+        // may reference a variable one of them writes.
+        ValidateVerdictSource(item.VerdictSource, $"{itemPath}.verdictSource", defined, issues);
+        ValidateChecks(item, itemPath, defined, issues);
+    }
+
+    /// <summary>
+    /// A group or a call. Either has no steps and no judgments of its own - its verdict is its
+    /// children's - so a step or a check on one is a mistake the runner would silently ignore.
+    /// </summary>
+    private void ValidateContainer(
+        TestItemDefinition item,
+        string itemPath,
+        Dictionary<string, object?> defined,
+        ISet<string> itemIds,
+        ICollection<ValidationIssue> issues)
+    {
+        var kind = item.IsCall ? "call" : "group";
+        if (item.IsGroup && item.IsCall)
+        {
+            issues.Add(new ValidationIssue { Path = itemPath, Message = "An item is either a group (items) or a call, not both." });
+        }
+
+        if (item.InitSteps.Count + item.MainSteps.Count + item.CleanupSteps.Count > 0)
+        {
+            issues.Add(new ValidationIssue { Path = itemPath, Message = $"A {kind} has no steps of its own; put them in a test item inside it." });
+        }
+
+        if (item.Checks.Count > 0 || !string.IsNullOrWhiteSpace(item.VerdictSource.StepId))
+        {
+            issues.Add(new ValidationIssue { Path = itemPath, Message = $"A {kind} is judged by its children; it has no verdict source or checks." });
+        }
+
+        if (item.IsGroup)
+        {
+            ValidateItemList(item.Items, $"{itemPath}.items", defined, itemIds, issues);
+        }
+
+        if (item.Call is { } call)
+        {
+            ValidateCall(call, $"{itemPath}.call", defined, issues);
+        }
+    }
+
+    /// <summary>
+    /// A call's path and parameters. With a resolver, also that the sequence exists and that every
+    /// parameter is one of its variables - a parameter it does not declare is set and never read,
+    /// which is what a typo in its name looks like. Nothing the callee writes is visible afterwards,
+    /// so it defines nothing in the caller.
+    /// </summary>
+    private void ValidateCall(
+        SequenceCallDefinition call,
+        string path,
+        IReadOnlyDictionary<string, object?> defined,
+        ICollection<ValidationIssue> issues)
+    {
+        if (string.IsNullOrWhiteSpace(call.Path))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.path", Message = "A call needs the path of the sequence it runs." });
+            return;
+        }
+
+        foreach (var (name, value) in call.Parameters)
+        {
+            foreach (var reference in VariableReference.NamesIn(value).Where(reference => !defined.ContainsKey(reference)))
+            {
+                issues.Add(new ValidationIssue
+                {
+                    Path = $"{path}.parameters.{name}",
+                    Message = $"Call parameter '{name}' references variable '{reference}', which is not defined."
+                });
+            }
+        }
+
+        if (_sequences is null)
+        {
+            return;
+        }
+
+        TestSequence callee;
+        try
+        {
+            callee = _sequences.Resolve(call.Path);
+        }
+        catch (Exception ex)
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.path", Message = $"Called sequence '{call.Path}' cannot be loaded: {ex.Message}" });
+            return;
+        }
+
+        foreach (var name in call.Parameters.Keys.Where(name => !callee.Variables.ContainsKey(name)))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{path}.parameters.{name}",
+                Severity = ValidationSeverity.Warning,
+                Message = $"Called sequence '{call.Path}' has no variable '{name}'; the parameter is set and never read."
+            });
+        }
+    }
+
+    /// <summary>
+    /// A loop's count must parse, and its index variable must be a name a <c>${}</c> can reach.
+    /// The index is defined from here on, as a whole number - which is what lets a step's Integer
+    /// parameter take <c>${loopIndex}</c> without a type warning.
+    /// </summary>
+    private static void ValidateLoop(
+        LoopDefinition loop,
+        string path,
+        Dictionary<string, object?> defined,
+        ICollection<ValidationIssue> issues)
+    {
+        if (string.IsNullOrWhiteSpace(loop.Count))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.count", Message = "A loop needs a count." });
+        }
+        else
+        {
+            ValidateExpression(loop.Count, $"{path}.count", "loop count", defined, issues);
+        }
+
+        if (!VariableReference.IsWholeValueReference($"${{{loop.Variable}}}"))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{path}.variable",
+                Message = $"Loop variable '{loop.Variable}' is not a valid variable name; it starts with a letter or underscore and continues with letters, digits, '_', '.' or '-'."
+            });
+            return;
+        }
+
+        defined[loop.Variable] = 0;
+    }
+
+    private static void ValidateRetry(
+        RetryDefinition retry,
+        string path,
+        IReadOnlyDictionary<string, object?> defined,
+        ICollection<ValidationIssue> issues)
+    {
+        if (retry.MaxAttempts < 1)
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.maxAttempts", Message = "maxAttempts counts the first attempt too, so it is at least 1." });
+        }
+
+        if (retry.IntervalMs < 0)
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.intervalMs", Message = "intervalMs cannot be negative." });
+        }
+
+        if (retry.MaxAttempts == 1 && string.IsNullOrWhiteSpace(retry.Until))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{path}.maxAttempts",
+                Severity = ValidationSeverity.Warning,
+                Message = "maxAttempts is 1, so this retry never runs anything again."
+            });
+        }
+
+        ValidateExpression(retry.Until, $"{path}.until", "until", defined, issues);
+    }
+
+    /// <summary>
+    /// An expression must parse and read only variables that exist where it is evaluated. Null or
+    /// blank is fine - every expression in a sequence is optional.
+    /// </summary>
+    private static void ValidateExpression(
+        string? text,
+        string path,
+        string field,
+        IReadOnlyDictionary<string, object?> defined,
+        ICollection<ValidationIssue> issues)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (!SequenceExpression.TryParse(text, out var expression, out var error))
+        {
+            issues.Add(new ValidationIssue { Path = path, Message = $"{field} is not a valid expression: {error}" });
+            return;
+        }
+
+        foreach (var name in expression!.VariableNames.Where(name => !defined.ContainsKey(name)))
+        {
+            issues.Add(new ValidationIssue { Path = path, Message = $"{field} references variable '{name}', which is not defined." });
+        }
+    }
+
+    /// <summary>
+    /// Each check is held to the rules of the verdict source, plus what only a check needs: an
+    /// output key, since it always judges an output, and a name its records do not share with
+    /// another judgment of the same item - two judgments both called <c>value</c> would make a
+    /// report unable to tell their records apart.
+    /// </summary>
+    private static void ValidateChecks(
+        TestItemDefinition item,
+        string itemPath,
+        IReadOnlyDictionary<string, object?> definedVariables,
+        ICollection<ValidationIssue> issues)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(item.VerdictSource.OutputKey))
+        {
+            names.Add(JudgmentName(item.VerdictSource));
+        }
+
+        for (var index = 0; index < item.Checks.Count; index++)
+        {
+            var check = item.Checks[index];
+            var path = $"{itemPath}.checks[{index}]";
+
+            if (string.IsNullOrWhiteSpace(check.StepId))
+            {
+                issues.Add(new ValidationIssue { Path = $"{path}.stepId", Message = "Check step is required." });
+            }
+            else if (item.MainSteps.All(step => !string.Equals(step.Id, check.StepId, StringComparison.OrdinalIgnoreCase)))
+            {
+                issues.Add(new ValidationIssue { Path = $"{path}.stepId", Message = "Check step must be in main steps." });
+            }
+
+            if (string.IsNullOrWhiteSpace(check.OutputKey))
+            {
+                // Numeric and string judgments already report this through ValidateVerdictSource.
+                if (check.JudgeType == VerdictJudgeType.PassFail)
+                {
+                    issues.Add(new ValidationIssue { Path = $"{path}.outputKey", Message = "A check requires an output key." });
+                }
+            }
+            else if (!names.Add(JudgmentName(check)))
+            {
+                issues.Add(new ValidationIssue
+                {
+                    Path = $"{path}.name",
+                    Severity = ValidationSeverity.Warning,
+                    Message = $"Another judgment of this item is also called '{JudgmentName(check)}'; give the check a name so their records can be told apart."
+                });
+            }
+
+            ValidateVerdictSource(check, path, definedVariables, issues);
+        }
+    }
+
+    private static string JudgmentName(VerdictSource source) =>
+        string.IsNullOrWhiteSpace(source.Name) ? source.OutputKey?.Trim() ?? string.Empty : source.Name.Trim();
+
+    private static void ValidateVerdictSource(
+        VerdictSource source,
+        string path,
+        IReadOnlyDictionary<string, object?> definedVariables,
+        ICollection<ValidationIssue> issues)
     {
         // YAML deserializes an out-of-range number straight into the enum, so a file can carry a
         // judge type the runner has no branch for. Without this it reaches execution and falls
@@ -120,33 +429,9 @@ public sealed class TestSequenceValidator
             issues.Add(new ValidationIssue { Path = $"{path}.outputKey", Message = "Configured verdict requires an output key." });
         }
 
-        if (source.JudgeType == VerdictJudgeType.Numeric &&
-            !source.LowerLimit.HasValue &&
-            !source.UpperLimit.HasValue)
+        if (source.JudgeType == VerdictJudgeType.Numeric)
         {
-            issues.Add(new ValidationIssue { Path = path, Message = "Numeric verdict requires lowerLimit or upperLimit." });
-        }
-
-        if (source.JudgeType == VerdictJudgeType.Numeric &&
-            source.LowerLimit.HasValue &&
-            !double.IsFinite(source.LowerLimit.Value))
-        {
-            issues.Add(new ValidationIssue { Path = $"{path}.lowerLimit", Message = "Numeric lowerLimit must be finite." });
-        }
-
-        if (source.JudgeType == VerdictJudgeType.Numeric &&
-            source.UpperLimit.HasValue &&
-            !double.IsFinite(source.UpperLimit.Value))
-        {
-            issues.Add(new ValidationIssue { Path = $"{path}.upperLimit", Message = "Numeric upperLimit must be finite." });
-        }
-
-        if (source.JudgeType == VerdictJudgeType.Numeric &&
-            source.LowerLimit.HasValue &&
-            source.UpperLimit.HasValue &&
-            source.LowerLimit.Value > source.UpperLimit.Value)
-        {
-            issues.Add(new ValidationIssue { Path = $"{path}.lowerLimit", Message = "Numeric lowerLimit must be less than or equal to upperLimit." });
+            ValidateNumericBounds(source, path, definedVariables, issues);
         }
 
         if (source.JudgeType == VerdictJudgeType.String &&
@@ -154,6 +439,175 @@ public sealed class TestSequenceValidator
         {
             issues.Add(new ValidationIssue { Path = $"{path}.expectedString", Message = "String verdict requires expectedString." });
         }
+    }
+
+    /// <summary>
+    /// Checks that a numeric judgment has exactly the bounds its comparison reads, by the same
+    /// <see cref="NumericComparisonRules"/> the runner uses.
+    ///
+    /// A bound the comparison does not read is a warning, not an error: it does no harm, but it is
+    /// usually left over from switching comparison - an <c>EQ</c> still carrying the range it had
+    /// as <c>GELE</c> - and whoever reads the file will take it as part of the test.
+    /// </summary>
+    private static void ValidateNumericBounds(
+        VerdictSource source,
+        string path,
+        IReadOnlyDictionary<string, object?> definedVariables,
+        ICollection<ValidationIssue> issues)
+    {
+        var comparison = source.Comparison;
+        if (!Enum.IsDefined(comparison))
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.comparison", Message = $"Unknown numeric comparison '{(int)comparison}'." });
+            return;
+        }
+
+        var hasLower = source.LowerLimit.HasValue || !string.IsNullOrWhiteSpace(source.LowerLimitReference);
+        var hasUpper = source.UpperLimit.HasValue || !string.IsNullOrWhiteSpace(source.UpperLimitReference);
+        var hasExpected = source.Expected.HasValue || !string.IsNullOrWhiteSpace(source.ExpectedReference);
+
+        if (comparison == NumericComparison.GELE)
+        {
+            if (!hasLower && !hasUpper)
+            {
+                issues.Add(new ValidationIssue { Path = path, Message = "Numeric verdict requires lowerLimit or upperLimit." });
+            }
+        }
+        else
+        {
+            if (comparison.UsesLowerLimit() && !hasLower)
+            {
+                issues.Add(new ValidationIssue { Path = $"{path}.lowerLimit", Message = $"Numeric comparison {comparison} requires lowerLimit." });
+            }
+
+            if (comparison.UsesUpperLimit() && !hasUpper)
+            {
+                issues.Add(new ValidationIssue { Path = $"{path}.upperLimit", Message = $"Numeric comparison {comparison} requires upperLimit." });
+            }
+
+            if (comparison.UsesExpected() && !hasExpected)
+            {
+                issues.Add(new ValidationIssue { Path = $"{path}.expected", Message = $"Numeric comparison {comparison} requires expected." });
+            }
+        }
+
+        WarnUnused(comparison.UsesLowerLimit(), hasLower, $"{path}.lowerLimit", "lowerLimit", comparison, issues);
+        WarnUnused(comparison.UsesUpperLimit(), hasUpper, $"{path}.upperLimit", "upperLimit", comparison, issues);
+        WarnUnused(comparison.UsesExpected(), hasExpected, $"{path}.expected", "expected", comparison, issues);
+
+        var lower = comparison.UsesLowerLimit()
+            ? ValidateLimit(source.LowerLimit, source.LowerLimitReference, $"{path}.lowerLimit", "lowerLimit", definedVariables, issues)
+            : null;
+        var upper = comparison.UsesUpperLimit()
+            ? ValidateLimit(source.UpperLimit, source.UpperLimitReference, $"{path}.upperLimit", "upperLimit", definedVariables, issues)
+            : null;
+        var expected = comparison.UsesExpected()
+            ? ValidateLimit(source.Expected, source.ExpectedReference, $"{path}.expected", "expected", definedVariables, issues)
+            : null;
+
+        if (lower > upper)
+        {
+            issues.Add(new ValidationIssue { Path = $"{path}.lowerLimit", Message = "Numeric lowerLimit must be less than or equal to upperLimit." });
+        }
+
+        // EQ is exact. A fractional expected value is almost always a reading, which will not land
+        // on it exactly after any conversion or instrument rounding; a tolerance band is what was meant.
+        if (comparison.UsesExpected() && expected is { } value && value != Math.Floor(value))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{path}.expected",
+                Severity = ValidationSeverity.Warning,
+                Message = $"{comparison} compares exactly, and {value} is not a whole number; a measured value rarely lands on it. Use GELE with a tolerance band instead."
+            });
+        }
+    }
+
+    private static void WarnUnused(
+        bool used,
+        bool present,
+        string path,
+        string field,
+        NumericComparison comparison,
+        ICollection<ValidationIssue> issues)
+    {
+        if (!used && present)
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = path,
+                Severity = ValidationSeverity.Warning,
+                Message = $"Numeric comparison {comparison} does not use {field}; it is ignored."
+            });
+        }
+    }
+
+    /// <summary>
+    /// Checks one numeric limit and returns its value when that is knowable before the run, so the
+    /// caller can compare the two bounds.
+    ///
+    /// A reference is held to what the runner will do with it: it must be one whole
+    /// <c>${variable}</c>, the variable must exist by the time the item is judged, and when its value
+    /// is written in the file it must be a number. A variable some step writes has no knowable value
+    /// and passes - what a plugin output carries is the plugin's business.
+    /// </summary>
+    private static double? ValidateLimit(
+        double? literal,
+        string? reference,
+        string path,
+        string field,
+        IReadOnlyDictionary<string, object?> definedVariables,
+        ICollection<ValidationIssue> issues)
+    {
+        if (string.IsNullOrWhiteSpace(reference))
+        {
+            if (literal is { } number && !double.IsFinite(number))
+            {
+                issues.Add(new ValidationIssue { Path = path, Message = $"Numeric {field} must be finite." });
+                return null;
+            }
+
+            return literal;
+        }
+
+        if (literal.HasValue)
+        {
+            issues.Add(new ValidationIssue { Path = path, Message = $"Numeric {field} has both a value and a variable reference; keep one." });
+        }
+
+        if (!VariableReference.IsWholeValueReference(reference))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = path,
+                Message = $"Numeric {field} must be a number or a single ${{variable}} reference, but is '{reference}'."
+            });
+            return null;
+        }
+
+        var name = VariableReference.NamesIn(reference)[0];
+        if (!definedVariables.TryGetValue(name, out var known))
+        {
+            issues.Add(new ValidationIssue { Path = path, Message = $"Numeric {field} references variable '{name}', which is not defined." });
+            return null;
+        }
+
+        if (known is null)
+        {
+            return null;
+        }
+
+        if (!NumericValue.TryRead(known, out var value))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = path,
+                Message = $"Numeric {field} references variable '{name}', which holds '{known}' rather than a number."
+            });
+            return null;
+        }
+
+        return value;
     }
 
     /// <summary>
@@ -430,6 +884,7 @@ public sealed class TestSequenceValidator
                 }
             }
 
+            ValidateExpression(step.RunIf, $"{stepPath}.runIf", "runIf", definedVariables, issues);
             ValidateVariableWrites(step.VariableWrites, $"{stepPath}.variableWrites", issues);
 
             // After this step's own parameters: a step cannot reference the variable it is about to
@@ -439,6 +894,12 @@ public sealed class TestSequenceValidator
             foreach (var write in step.VariableWrites.Where(write => !string.IsNullOrWhiteSpace(write.Name)))
             {
                 definedVariables[write.Name] = null;
+            }
+
+            // After the writes: a poll's until reads what this very step just wrote.
+            if (step.Retry is { } retry)
+            {
+                ValidateRetry(retry, $"{stepPath}.retry", definedVariables, issues);
             }
         }
     }

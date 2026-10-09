@@ -27,17 +27,33 @@ internal static partial class UnitConverter
         ["%"] = new("ratio", 1.0)
     };
 
-    public static bool TryConvertToDouble(object? value, string? sourceUnit, string? targetUnit, out double converted)
+    public static bool TryConvertToDouble(object? value, string? sourceUnit, string? targetUnit, out double converted) =>
+        TryConvertToDouble(value, sourceUnit, targetUnit, out converted, out _);
+
+    /// <summary>
+    /// As above, also reporting the unit <paramref name="converted"/> is in: the target when one is
+    /// declared, otherwise the measurement's own unit or <paramref name="sourceUnit"/>.
+    /// </summary>
+    public static bool TryConvertToDouble(
+        object? value,
+        string? sourceUnit,
+        string? targetUnit,
+        out double converted,
+        out string? effectiveUnit)
     {
         converted = default;
+        effectiveUnit = null;
         if (!TryReadNumberAndUnit(value, out var number, out var valueUnit))
         {
             return false;
         }
 
         var fromUnit = string.IsNullOrWhiteSpace(valueUnit) ? sourceUnit : valueUnit;
+        effectiveUnit = NullIfBlank(string.IsNullOrWhiteSpace(targetUnit) ? fromUnit : targetUnit);
         return TryConvert(number, fromUnit, targetUnit, out converted);
     }
+
+    private static string? NullIfBlank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     private static bool TryReadNumberAndUnit(object? value, out double number, out string? unit)
     {

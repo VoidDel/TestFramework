@@ -66,7 +66,8 @@ public sealed class FrameworkContractTests
 
         Assert.Empty(report.Failures);
         Assert.NotEmpty(report.StepPlugins);
-        Assert.Equal(new Version(1, 0), Assert.Single(report.AssemblyContracts).Value);
+        // The built-in steps need 1.1 for basic.prompt's operator interaction.
+        Assert.Equal(new Version(1, 1), Assert.Single(report.AssemblyContracts).Value);
     }
 
     private static string FixturePath(string fileName) =>

@@ -1,0 +1,112 @@
+schemaVersion: 1
+id: bms-flow-demo
+name: BMS Flow Demo
+version: '1.0'
+variables:
+  dutSerial: DEMO-0001
+  runPrecheck: true
+  channelCount: 4
+  cellMin: 3.0
+  cellMax: 3.6
+  spreadMaxMv: 10
+  soc: 0
+  cellVoltages:
+  - 3.301
+  - 3.297
+  - 3.305
+  - 3.299
+items:
+- id: setup
+  name: 上电准备
+  verdictSource:
+    stepId: confirm-harness
+  main:
+  - id: confirm-harness
+    name: 确认线束
+    pluginId: basic.prompt
+    pluginVersion: 1.0.0
+    parameters:
+      Message: 接好 BMS 线束后按确定
+      Options: 确定,取消
+- id: precheck
+  name: 公共预检
+  runIf: ${runPrecheck}
+  call:
+    path: shared/precheck.yaml
+    parameters:
+      label: DUT-${dutSerial}
+- id: cells
+  name: 电芯测试
+  items:
+  - id: cell-voltages
+    name: 单体电压
+    verdictSource:
+      name: 单体电压
+      stepId: read-cells
+      outputKey: value
+      judgeType: Numeric
+      lowerLimit: ${cellMin}
+      upperLimit: ${cellMax}
+      sourceUnit: V
+      unit: V
+    checks:
+    - name: 最大压差
+      stepId: spread
+      outputKey: value
+      judgeType: Numeric
+      comparison: LE
+      upperLimit: ${spreadMaxMv}
+      sourceUnit: mV
+      unit: mV
+    main:
+    - id: read-cells
+      name: 读取单体电压
+      pluginId: basic.calculate
+      pluginVersion: 1.0.0
+      parameters:
+        Expression: ${cellVoltages}
+    - id: spread
+      name: 计算最大压差
+      pluginId: basic.calculate
+      pluginVersion: 1.0.0
+      parameters:
+        Expression: (max(${cellVoltages}) - min(${cellVoltages})) * 1000
+  - id: channels
+    name: 通道检查
+    loop:
+      count: ${channelCount}
+      variable: channel
+    verdictSource:
+      stepId: channel-gain
+      outputKey: value
+      judgeType: Numeric
+      comparison: LT
+      upperLimit: 10
+    main:
+    - id: channel-gain
+      name: 通道增益
+      pluginId: basic.calculate
+      pluginVersion: 1.0.0
+      parameters:
+        Expression: ${channel} * 2
+- id: charge
+  name: 充电到 95%
+  verdictSource:
+    stepId: poll-soc
+    outputKey: value
+    judgeType: Numeric
+    comparison: GE
+    lowerLimit: 95
+  main:
+  - id: poll-soc
+    name: 读取 SOC
+    pluginId: basic.calculate
+    pluginVersion: 1.0.0
+    retry:
+      maxAttempts: 10
+      until: ${soc} >= 95
+    parameters:
+      Expression: ${soc} + 25
+    variableWrites:
+    - name: soc
+      outputKey: value

@@ -1,0 +1,17 @@
+schemaVersion: 1
+id: shared-precheck
+name: 公共预检
+variables:
+  label: unset
+items:
+- id: log-label
+  name: 记录标签
+  verdictSource:
+    stepId: log
+  main:
+  - id: log
+    name: 记录
+    pluginId: basic.log
+    pluginVersion: 1.0.0
+    parameters:
+      Message: 预检 ${label}

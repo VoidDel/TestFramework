@@ -19,6 +19,9 @@ public sealed class DelayStepPlugin : ITestStepPlugin
 
     public Type SettingsType => typeof(DelayStepSettings);
 
+    // Holds nothing between calls, so stations need not take turns.
+    public bool IsThreadSafe => true;
+
     public IReadOnlyList<StepParameterDescriptor> Parameters { get; } =
     [
         new StepParameterDescriptor

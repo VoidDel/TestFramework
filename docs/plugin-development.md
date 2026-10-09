@@ -62,6 +62,8 @@ using TestFramework.Abstractions.Plugins;
 [assembly: TestFrameworkPlugin("1.0")]
 ```
 
+只用到 1.0 成员的插件声明 1.0，能被任何 0.x 宿主加载；用到 `IsThreadSafe`、`StepParameterKind.Expression` 或 `context.Operator` 的插件声明 `"1.1"`（框架 0.5.0 起提供）。
+
 宿主在**实例化任何类型之前**读取这个声明。声明高于宿主能提供的版本时，整个程序集被拒绝并记录一条明确的失败信息，插件代码一行都不会执行 —— 而不是等到运行到一半抛 `MissingMethodException`。
 
 未声明的程序集按 `FrameworkContract.Baseline`（1.0）处理，即该属性出现之前的插件所针对的契约。
@@ -146,6 +148,33 @@ public sealed class MyStepPlugin : ITestStepPlugin
 - 变量引用（`${name}`）在 `LoadSettings` 之前已解析完毕，插件拿到的是普通值。
 - 参数值带着 YAML 标量类型到达：文件里未加引号的 `5.0` 是 double、`7` 是 int、`true` 是 bool，加引号的是字符串；保存时会给形似数字或布尔的字符串加引号，类型经往返不变。`LoadSettings` 应同时接受数字与字符串两种形式（内置的 `SettingsMap` 即如此），手写文件或文本输入都可能给出字符串。
 - 输出写入 `TestStepResult.Outputs`，序列通过 `verdictSource.outputKey` 取用。
+- 一次读回多路同类测量值（80 串单体电压、32 路温度）时，把它们作为**一个**列表或字典输出，不要拆成 80 个键、更不要让序列写 80 个步骤。数值判定会对每个元素套用同一组限值并逐个记录；字典的键（通常是信号名，如 `Cell01`）会成为记录名，列表则记为 `key[0]`、`key[1]`……。元素可以是数字，也可以是带单位的字符串（`"3301 mV"`）。
+- 插件**不要**自己往结果里填 `PluginId` / `PluginVersion`：运行器会写入实际运行的插件与版本。
+- 插件**不必**自己实现重试或轮询：步骤的 `retry`（含 `until` 条件）由运行器负责。插件只需诚实地返回这一次的结果。
+
+### 线程安全（契约 1.1）
+
+插件实例在进程内只有一个，被所有步骤、所有运行共用。一个宿主同时跑多个工位时，多个 runner 会同时调用它。
+
+```csharp
+public bool IsThreadSafe => true;
+```
+
+- 默认 `false`：框架在整个进程范围内让各工位对该实例的调用**排队**，插件不必为并发而写。
+- 不在两次调用之间保存状态（或自己加了锁）的插件返回 `true`，就能被多个工位同时调用。
+- 不确定就保持默认。错误地声明线程安全，后果是两个工位的帧交错、看起来像硬件故障。
+
+### 操作员交互（契约 1.1）
+
+需要操作员确认或选择时，通过 `context.Operator` 提问，不要自己弹窗——插件不知道宿主是桌面窗口、触摸屏还是无人值守的产线控制器：
+
+```csharp
+var response = await context.Operator.PromptAsync(
+    new OperatorPrompt { Title = "确认", Message = "接好线束后按确定", Options = ["确定", "取消"] },
+    cancellationToken);
+```
+
+宿主没有操作员交互时调用会抛异常，步骤判 `Error`。取消或步骤超时时，宿主负责关闭提示并让调用抛出。内置的 `basic.prompt` 就是这样实现的。
 
 ### 声明参数
 
@@ -156,7 +185,9 @@ public sealed class MyStepPlugin : ITestStepPlugin
 - **运行前校验。** `TestSequenceValidator` 按声明检查取值：类型不符、超出范围、不在枚举内、必填缺失，都在编辑阶段报错，而不是跑到一半才在设备已接 DUT 的情况下失败。未声明的多余键报为警告（可能是笔误，也可能是新版插件才读的键），不拒绝序列。
 - **自动生成界面。** 宿主按声明生成表单，只有确实需要定制控件的参数才值得再写一个设置界面插件。
 
-`Kind` 只有 `String`/`Integer`/`Number`/`Boolean`/`Enum` 五种，刻意保持得小：这是宿主能逐项渲染、校验器能不靠反射检查、并且将来能跨进程传递的集合。参数形状超出这个范围的插件，继续自带设置界面即可。
+`Kind` 只有 `String`/`Integer`/`Number`/`Boolean`/`Enum`/`Expression` 六种，刻意保持得小：这是宿主能逐项渲染、校验器能不靠反射检查、并且将来能跨进程传递的集合。参数形状超出这个范围的插件，继续自带设置界面即可。
+
+`Expression`（契约 1.1）是插件自己求值的表达式，例如 `max(${cells}) - min(${cells})`。运行器**不会**对它做变量替换——其中的 `${}` 是表达式的操作数，把列表变量替换成文字会毁掉它。插件拿到原文，用 `SequenceExpression.Parse(text).Evaluate(context.Variables)` 求值；校验器检查它能解析、变量已定义。1.1 之前的宿主会把这种参数当普通文本显示。
 
 `AllowVariableReference` 默认为 `true`。参数值写成 `${name}` 时，实际取值要到运行时才知道，因此类型与范围检查对该参数暂停，改为检查变量本身是否已定义；必须在运行前确定的参数把它设为 `false`。
 

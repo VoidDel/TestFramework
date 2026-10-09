@@ -29,13 +29,30 @@ path stays honest. See `docs/plugin-development.md` for the plugin repository la
 
 ## Sequence Shape
 
-Each test sequence contains test items. Each item has three step sections:
+Each test sequence contains a tree of items: test items, groups of items, and calls into other
+sequences (see Flow Control). Each test item has three step sections:
 
 - `init`: initialization steps, optional.
 - `main`: primary test steps, required.
 - `cleanup`: de-initialization steps, optional.
 
 `verdictSource.stepId` must point to a step in `main`. `verdictSource.outputKey` is optional; when set, the runner converts that output value to a final item verdict.
+
+An item may also list `checks`: further judgments, each of one main step's output and each with its
+own limits, unit and comparison - voltage and current in one item, each against its own range. A
+check is written exactly like `verdictSource`, plus an optional `name` for its records, and it always
+needs an `outputKey`, since taking a step's own verdict is what the verdict source is for. They sit
+in a list beside `verdictSource` rather than replacing it because plugins read
+`TestItemDefinition` through the execution context, and an existing member cannot change.
+
+The judgments - the verdict source and every check - decide the item together, but they cannot
+overrule the rest of it. An item is `Error` when any of its steps errored or any judgment could not
+be made, and otherwise `Fail` when any judgment failed or any step returned `Fail` - in `init`,
+`main` or `cleanup`. Only when every judgment passed does the item pass; one that could not judge
+its value leaves the item `Inconclusive`. Two limit checks in one item is the natural way to write
+"voltage and current", and letting the second one's `Pass` hide the first one's `Fail` would ship a
+failing unit as good. The one exception is a step whose output a judgment reads: judging that output
+replaces the step's own verdict.
 
 ## Plugin Contract
 
@@ -98,6 +115,11 @@ constraint on how it may change: every member added to an existing plugin-facing
 default implementation, and existing members never change signature or meaning. A change that cannot
 be made that way is a new major contract version, and the plugins it locks out are refused at load
 time with a message rather than failing somewhere inside a run.
+
+Contract **1.1** (framework 0.5.0) added, all additively: `ITestStepPlugin.IsThreadSafe` with a
+default of `false`, `StepParameterKind.Expression`, and `TestStepExecutionContext.Operator`. A 1.0
+plugin runs unchanged. A plugin that uses any of them declares 1.1, so a 1.0 host refuses it at load
+with a reason instead of failing on a missing member mid-run.
 
 ## Plugin Lifecycle and Trust Boundary
 
@@ -168,6 +190,9 @@ Cleanup steps run when normal execution completes and after both `Stop` and `Jum
 
 Step execution (including synchronous plugin code and settings loading) runs off the UI thread. The host bounds its wait by the step timeout and user cancellation. A plugin that exits more than 100 ms after cancellation is quarantined: the sequence stops without executing further steps or cleanup against the same resources. `HasPendingExecution` records this condition in the result. A host using `TestSequenceRunner` directly must await `PendingStepsCompletion` before releasing resources or reusing plugin instances, and must keep the resources alive until it completes. Resource cleanup attempts every resource and aggregates failures. A host is expected to surface a cleanup failure and stop accepting runs: the device state is unknown, and the next run would measure against it.
 
+`TestRunSession` (see Run Orchestration) applies every rule in this paragraph and the next; a host
+that drives `TestSequenceRunner` directly owes them itself.
+
 That gate is per-runner, so **a host keeps one `TestSequenceRunner` for the life of the bench** and
 passes each run's scope to `RunAsync(sequence, resources, cancellationToken)`. Supplying resources
 through the constructor instead forces a new runner whenever the scope changes - which a station
@@ -202,6 +227,68 @@ getting it wrong means passing a DUT that should have failed:
 
 `Ω` normalises to `Ohm`, and both `µ` (U+00B5 MICRO SIGN) and `μ` (U+03BC GREEK SMALL LETTER MU)
 normalise to `u`, since instruments and operators produce either one.
+
+#### Comparisons
+
+`comparison` says how the value is compared, using TestStand's codes so a sequence reads the same to
+anyone who has written one there: `GELE` (the default), `GTLT`, `GELT`, `GTLE`, `GT`, `GE`, `LT`,
+`LE`, `EQ` and `NE`. The interval codes read both limits, `GT`/`GE` only `lowerLimit`, `LT`/`LE`
+only `upperLimit`, and `EQ`/`NE` read `expected`, which takes a number or a `${variable}` like the
+limits do. `NumericComparisonRules` is the one statement of which code reads what, shared by the
+validator, the runner and a host's editor.
+
+`GELE` keeps exactly what a numeric verdict did before comparisons existed, including a single
+limit standing alone as a one-sided test. Every other code needs every bound it reads: someone who
+asked for an open interval and wrote one bound has made a mistake, and the single-limit codes exist
+for a one-sided test. A missing bound is an item `Error` at run time and an error in the validator;
+a bound the comparison does not read is a validator warning and is ignored at run time - it is
+usually left over from switching comparison, and a reader will take it as part of the test.
+
+`EQ` and `NE` compare exactly. They are for integral values - a cell count, a status code - and the
+validator warns about a fractional `expected`, which a measured value will not land on after any
+conversion or instrument rounding; a `GELE` tolerance band is what was meant.
+
+The keys added with comparisons and checks - `name`, `comparison`, `expected`, `checks` - are not
+written while they hold their defaults, so a sequence that does not use them saves byte for byte as
+it did before, and a file under version control does not change on its first save after an upgrade.
+
+#### Multi-channel outputs
+
+A numeric verdict on a list or dictionary output judges **every element** against the same limits.
+A step that reads 80 cell voltages in one transaction is therefore one item, not 80: any element
+outside the limits fails the item, any element that cannot be read as a number (and none failing)
+leaves it `Inconclusive`, and an output with no elements is `Inconclusive` too - it measured
+nothing, and passing it would pass a DUT on no evidence. A dictionary's keys, usually signal names,
+name the elements; a list's elements are named after the judgment - its `name`, or its `outputKey`
+when it has none - as `name[0]`, `name[1]` and so on. Each judgment combines only its own elements,
+so a check whose value could not be read is not outvoted by the verdict source's passing ones.
+
+#### Limits from variables
+
+`lowerLimit`, `upperLimit` and `expected` take either a number or a single `${variable}`, so the limits for a
+product variant live in its variables rather than in every item. A reference is resolved when the
+item is judged - after its steps have run - so a step may compute a limit and write it. Because
+plugins read `VerdictSource` through the execution context, the model keeps the reference in
+`LowerLimitReference` / `UpperLimitReference` rather than changing the type of `LowerLimit`; in a
+file both are the same key. The validator checks a reference the way it checks a parameter's: it
+must be the whole value, the variable must exist by then, and a value written in the file must be a
+number. At run time an undefined or non-numeric limit, no limit at all, or a lower limit above the
+upper one makes the item `Error` with `TestItemRunResult.ErrorMessage` saying why - a fault in the
+sequence, not in the DUT, and one that would otherwise drop a bound out of the comparison or fail
+every unit.
+
+#### What a result records
+
+`TestItemRunResult.Measurements` holds one `MeasurementResult` per judged value, across the verdict
+source and every check - the judgment it came from (`Check`), name, index, the raw value, the
+number compared and its unit, the comparison, the limits or expected value as resolved, and the
+element's verdict. The limits are recorded as they stood at judgment time instead of being left for
+a report to look up in the sequence, which can be edited after the run and whose limits can come
+from variables. Every judgment is made and recorded even when a step has already failed the item: a
+spread check failing must not cost the report the answer to which cell was low.
+`TestStepResult.PluginId` and `PluginVersion` name the plugin that actually ran, including on an
+error result; when a compatible newer version stood in, the version is the one that ran, not the one
+the file asked for.
 
 ## Variables
 
@@ -303,9 +390,101 @@ warning, because a host cannot answer the question for a bench it is not.
   without knowing which scope opened it. A run resource shadows a station resource of the same
   alias.
 
-After a run that ends in `TestVerdict.Error` the host marks the station scope stale and the next run
-reopens it. A `Fail` — a limit check that came out low — says nothing about the hardware and costs
-no reconnection, but anything that threw left a step part-way through, possibly mid-transaction on
-an instrument, and the next DUT must not inherit that. Nothing is torn down at the moment of the
-fault: the operator may still be looking at it, so the rebuild happens at the start of the next run
-where it is expected and can be reported.
+After a run that ends in `TestVerdict.Error`, `TestRunSession` marks the station scope stale and the
+next run reopens it. A `Fail` — a limit check that came out low — says nothing about the hardware
+and costs no reconnection, but anything that threw left a step part-way through, possibly
+mid-transaction on an instrument, and the next DUT must not inherit that. Nothing is torn down at
+the moment of the fault: the operator may still be looking at it, so the rebuild happens at the
+start of the next run where it is expected and can be reported.
+
+## Run Orchestration
+
+`TestSequenceRunner` runs a sequence; it does not decide when a bench may run the next one. Those
+decisions used to be every host's to re-derive - the reference host had about forty lines of them,
+correct, and easy to get wrong silently in a second host. `TestRunSession` makes them once:
+
+- It holds **one runner for the life of the bench**, so the runner's quarantine gate spans runs.
+- It opens each run's scope - from the `StationResourceHost`, or from the sequence's inline
+  definitions when there is no station - and marks the station stale after an `Error`.
+- When a step was abandoned it keeps that run's resources until the plugin exits, and **refuses the
+  next run** until then, before opening anything for it.
+- When releasing resources fails it records a **fault** and refuses runs until the host calls
+  `ClearFault`, which it should do only once someone has checked the hardware: the device state is
+  unknown and the next run would measure against it.
+- A second run while one is in progress is refused rather than queued, because a queued run starts
+  a DUT the operator believed had been turned away.
+- Every refusal is a `TestRunRefusedException` with a `TestRunRefusal` reason, so a host words it
+  for its own operators; every run that starts returns a result, cancelled or not.
+
+## Flow Control
+
+An item is one of three kinds: a test item with steps, a **group** whose `items` run in order and
+whose verdict is theirs, or a **call** that runs another sequence's items in its place. A group
+or a call has no steps and no judgments of its own; the validator rejects either. The tree runs
+depth first and shares one variable scope, except that a called sequence runs in a scope of its
+own - its variables, overridden by the call's `parameters` resolved in the caller's scope - and
+nothing it writes leaks back. It uses the caller's resources: the station is the caller's. An
+`ISequenceResolver` supplied by the host finds called sequences; `FileSequenceResolver` resolves
+paths under one directory and refuses any that leave it, because a call is part of a reviewed test
+and must not reach a file nobody reviewed with it. Calls nest at most `MaxCallDepth` (16) deep,
+which is how a sequence calling itself ends.
+
+On top of the kind, any item - and `runIf`/`retry` on any step - can carry:
+
+- `runIf`: a condition evaluated just before the node would run; false records it `Skipped` with a
+  `SkipReason`.
+- `loop` (items): `count` iterations, a whole number from an expression, with the index in
+  `variable`. Each iteration is its own result carrying `Iteration`.
+- `retry`: `maxAttempts` in total, `intervalMs` between them, and an optional `until` condition
+  evaluated after each attempt's variable writes. A step is retried on `Error` or `Fail`; an item
+  only on `Fail`, because an item that errored left a step part-way through and rerunning it
+  against hardware in that state spreads the fault. A quarantined step is never retried - its
+  plugin is still running. A poll that runs out of attempts with `until` still false is a `Fail`.
+  Failed attempts are kept on the final result (`PreviousAttempts`); a step's polls that merely
+  found their condition not yet true are not, or a ten-minute poll would carry six hundred of them.
+
+A flow definition that cannot be evaluated - a `runIf` that is not a boolean, a count that is not a
+number, a call that cannot be resolved - stops the sequence with an `Error` naming the expression.
+Skipping would pass by default and running would ignore the author's condition; neither should
+happen silently.
+
+### Expressions
+
+Conditions, counts, `until` and `basic.calculate` share one small language, `SequenceExpression`:
+arithmetic, comparison and logic, list indexing, and `abs`, `round`, `min`, `max`, `sum`, `avg`,
+`count`. Variables are written `${name}`, as everywhere else, so the validator recognises a
+reference the same way in an expression as in a parameter, and checks that every one it reads
+exists where it is evaluated. The language is strict on purpose: a condition must be a boolean,
+never truthy; text compared with a number, a division by zero or an undefined variable is an error
+rather than a guess. All numbers are doubles, and text that reads as a number compares as one,
+since a value typed into a run parameter arrives as text.
+
+A step parameter declared `StepParameterKind.Expression` is passed to its plugin unsubstituted -
+its `${}` are operands, and replacing a list variable with its text would destroy them - and the
+plugin evaluates it against the execution context's variables.
+
+## Concurrency Across Stations
+
+A step plugin is one instance shared by every runner in the process. Several stations in one host
+are several runners calling it at once, and most plugins were written for one bench. So unless a
+plugin declares `IsThreadSafe`, every call into it is serialised process-wide (`PluginExecutionGate`,
+keyed by the instance). The gate is released when the plugin actually returns, not when a runner
+stops waiting for it, so an abandoned call keeps other stations out of a plugin that is still
+driving hardware. Time spent waiting counts against the step's timeout, and a step that times out
+in the queue says so rather than blaming the plugin. The built-in steps hold no state and are
+declared thread-safe.
+
+## Results and Traceability
+
+A host passes a `TestRunInfo` - DUT serial number, operator, station, sequence file path and hash,
+free-form properties - and the result carries a copy, together with the sequence's own `version`,
+the framework build and its contract version. Each step result names the plugin and the version
+that actually ran beside the version the file requested, and each measurement records the
+comparison and the limits as resolved. A result therefore answers on its own which unit, on which
+bench, by whom, against which bytes of which test, by which code.
+
+`TestResultJson` is the framework's result file format: an envelope (`format`, `schemaVersion`,
+`result`) so a reader can refuse what it does not understand, camelCase properties, enums by name,
+exceptions as type, message, stack and inner exceptions (read back as `RecordedException`), and
+values as JSON can carry them - with anything else written as its invariant text, because a result
+must always be writable. One format means one report generator and one archive for every bench.

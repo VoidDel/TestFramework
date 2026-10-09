@@ -9,4 +9,7 @@ ConsoleApp1/
 .serena/
 *.nupkg
 results/
+# The pattern above is for run output folders, not for source. Git on Windows matches it
+# case-insensitively, which silently kept this source directory out of a release commit once.
+!TestFramework.Core/Results/
 artifacts/

@@ -39,29 +39,38 @@ jobs:
       - name: Test
         run: dotnet test TestFramework.sln --configuration Release --no-build
 
-      # All four shipped libraries: the two plugin contracts, and Core and SequenceYaml which a
-      # host references. Packing the solution picks up exactly the projects marked IsPackable.
+      # All five shipped libraries: the two plugin contracts, the instrument classes plugins share,
+      # and Core and SequenceYaml which a host references. Packing the solution picks up exactly the
+      # projects marked IsPackable.
       - name: Pack libraries
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           dotnet pack TestFramework.sln --configuration Release --no-build --output artifacts -p:PackageVersion=$version
-          $expected = @('TestFramework.Abstractions', 'TestFramework.Plugin.Abstractions.UI', 'TestFramework.Core', 'TestFramework.SequenceYaml')
+          $expected = @('TestFramework.Abstractions', 'TestFramework.Plugin.Abstractions.UI', 'TestFramework.Instruments', 'TestFramework.Core', 'TestFramework.SequenceYaml')
           foreach ($package in $expected) {
             if (-not (Test-Path "artifacts/$package.$version.nupkg")) { throw "Missing package: $package.$version.nupkg" }
           }
 
-      # The built-in step plugins ship as files, not as a package: a host has no compile-time
-      # dependency on a plugin, so there is nothing for it to reference. A host unpacks this zip
-      # into the folder it stages its Plugins/ directory from.
-      - name: Zip the built-in plugin package
+      # The framework's plugins ship as files, not as packages: a host has no compile-time
+      # dependency on a plugin, so there is nothing for it to reference. A host unpacks each zip
+      # into the folder it stages its Plugins/ directory from - BasicSteps always, InstrumentSteps
+      # where it drives instruments, Simulation on a bench without hardware.
+      - name: Zip the plugin packages
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          foreach ($expected in @('TestFramework.Plugins.BasicSteps.dll', 'TestFramework.Plugins.BasicSteps.UI.dll')) {
-            if (-not (Test-Path "artifacts/plugins/BasicSteps/$expected")) { throw "Missing staged plugin: $expected" }
+          $packages = [ordered]@{
+            'BasicSteps'      = @('TestFramework.Plugins.BasicSteps.dll', 'TestFramework.Plugins.BasicSteps.UI.dll')
+            'InstrumentSteps' = @('TestFramework.Plugins.InstrumentSteps.dll')
+            'Simulation'      = @('TestFramework.Plugins.Simulation.dll')
           }
-          Compress-Archive -Path artifacts/plugins/BasicSteps/* -DestinationPath "artifacts/TestFramework.Plugins.BasicSteps-$version.zip" -Force
+          foreach ($name in $packages.Keys) {
+            foreach ($expected in $packages[$name]) {
+              if (-not (Test-Path "artifacts/plugins/$name/$expected")) { throw "Missing staged plugin: $name/$expected" }
+            }
+            Compress-Archive -Path "artifacts/plugins/$name/*" -DestinationPath "artifacts/TestFramework.Plugins.$name-$version.zip" -Force
+          }
 
       - name: Upload packages
         uses: actions/upload-artifact@v4

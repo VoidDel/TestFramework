@@ -41,7 +41,7 @@ jobs:
         run: dotnet test TestFramework.sln --configuration Release --no-build
 
       # The release workflow only runs on a tag, so a packaging break would otherwise surface at
-      # release time. Packing here proves the four libraries still produce their packages.
+      # release time. Packing here proves the five libraries still produce their packages.
       - name: Pack smoke test
         if: runner.os == 'Windows'
         shell: pwsh
@@ -49,18 +49,27 @@ jobs:
           dotnet pack TestFramework.sln --configuration Release --no-build --output pack-smoke
           $packages = Get-ChildItem pack-smoke/*.nupkg | Select-Object -ExpandProperty Name
           Write-Host ($packages -join "`n")
-          if ($packages.Count -ne 4) { throw "Expected 4 packages, found $($packages.Count)" }
+          if ($packages.Count -ne 5) { throw "Expected 5 packages, found $($packages.Count)" }
 
       # The built-in step plugins are delivered as files into a host's Plugins/ directory, not as a
       # package, so their staging is not covered by the pack smoke test. A host copies from this
       # folder, which makes an empty one a broken delivery.
-      - name: Built-in plugin package staged
+      - name: Plugin packages staged
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $staged = Get-ChildItem artifacts/plugins/BasicSteps -Filter *.dll -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty Name
-          Write-Host ($staged -join "`n")
-          foreach ($expected in @('TestFramework.Plugins.BasicSteps.dll', 'TestFramework.Plugins.BasicSteps.UI.dll')) {
-            if ($staged -notcontains $expected) { throw "Missing staged plugin: $expected" }
+          $packages = [ordered]@{
+            'BasicSteps'      = @('TestFramework.Plugins.BasicSteps.dll', 'TestFramework.Plugins.BasicSteps.UI.dll')
+            'InstrumentSteps' = @('TestFramework.Plugins.InstrumentSteps.dll')
+            'Simulation'      = @('TestFramework.Plugins.Simulation.dll')
+          }
+          foreach ($name in $packages.Keys) {
+            $staged = Get-ChildItem "artifacts/plugins/$name" -Filter *.dll -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty Name
+            Write-Host "$($name): $($staged -join ', ')"
+            foreach ($expected in $packages[$name]) {
+              if ($staged -notcontains $expected) { throw "Missing staged plugin: $name/$expected" }
+            }
+            # The instrument classes are shared from the host; a copy staged here would be ignored.
+            if ($staged -contains 'TestFramework.Instruments.dll') { throw "$name stages TestFramework.Instruments.dll, which the host provides" }
           }

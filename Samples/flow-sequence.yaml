@@ -110,3 +110,10 @@ items:
     variableWrites:
     - name: soc
       outputKey: value
+cleanup:
+- id: power-down
+  name: 断电收尾
+  pluginId: basic.log
+  pluginVersion: 1.0.0
+  parameters:
+    Message: 测试结束，断开充电回路 DUT-${dutSerial}

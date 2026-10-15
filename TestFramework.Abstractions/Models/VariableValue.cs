@@ -77,6 +77,7 @@ public static class VariableValue
 
         var reassigned = sequence.Items
             .SelectMany(item => item.InitSteps.Concat(item.MainSteps).Concat(item.CleanupSteps))
+            .Concat(sequence.CleanupSteps)
             .SelectMany(step => step.VariableWrites)
             .Select(write => write.Name)
             .Where(name => !string.IsNullOrWhiteSpace(name))

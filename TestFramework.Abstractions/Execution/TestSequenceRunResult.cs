@@ -33,6 +33,14 @@ public sealed class TestSequenceRunResult
 
     public List<TestItemRunResult> ItemResults { get; } = [];
 
+    /// <summary>
+    /// The sequence's own cleanup steps (<c>TestSequence.CleanupSteps</c>), as one item result
+    /// whose <c>CleanupResults</c> are the steps, under <c>TestSequence.CleanupItemId</c>. Null when
+    /// the sequence declares none. It is not among <see cref="ItemResults"/>, which are the test
+    /// items as written, but its verdict counts towards <see cref="Verdict"/> as theirs do.
+    /// </summary>
+    public TestItemRunResult? Cleanup { get; set; }
+
     public Dictionary<string, object?> InitialVariables { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, object?> FinalVariables { get; set; } = new(StringComparer.OrdinalIgnoreCase);

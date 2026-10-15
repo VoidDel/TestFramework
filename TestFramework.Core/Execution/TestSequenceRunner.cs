@@ -109,6 +109,11 @@ public sealed class TestSequenceRunner
 
     private TestRunInfo _runInfo = new();
 
+    // One grace window per run for everything that runs after the operator cancelled - the current
+    // item's cleanup and then the sequence's - so a stop takes at most CleanupGracePeriod however
+    // many cleanup sections there are, rather than one period each.
+    private CancellationTokenSource? _cancellationGrace;
+
     private async Task<TestSequenceRunResult> RunGuardedAsync(
         TestSequence sequence,
         RuntimeResourceProvider? resources,
@@ -134,9 +139,14 @@ public sealed class TestSequenceRunner
         }
         finally
         {
+            _cancellationGrace?.Dispose();
+            _cancellationGrace = null;
             PendingStepsCompletion = ReleaseRunnerAsync(PendingStepsCompletion);
         }
     }
+
+    private CancellationToken CancellationGraceToken() =>
+        (_cancellationGrace ??= new CancellationTokenSource(CleanupGracePeriod)).Token;
 
     private async Task ReleaseRunnerAsync(Task pendingSteps)
     {
@@ -172,8 +182,30 @@ public sealed class TestSequenceRunner
             cancelled = true;
         }
 
+        if (sequence.CleanupSteps.Count > 0)
+        {
+            // After the items however they ended. After a cancellation it runs on the grace token
+            // the item's cleanup used, since the caller's token is already cancelled.
+            result.Cleanup = new TestItemRunResult();
+            try
+            {
+                await RunSequenceCleanupAsync(sequence, result.Cleanup, variables, cancelled ? CancellationGraceToken() : cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancelled)
+            {
+                // The grace period elapsed. The cancellation is what is reported, not this.
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                cancelled = true;
+            }
+        }
+
         result.FinishedAt = DateTimeOffset.Now;
-        result.Verdict = cancelled ? TestVerdict.Cancelled : AggregateSequenceVerdict(result.ItemResults);
+        result.Verdict = cancelled
+            ? TestVerdict.Cancelled
+            : AggregateSequenceVerdict(result.Cleanup is { } cleanup ? result.ItemResults.Append(cleanup) : result.ItemResults);
         result.HasPendingExecution = _abandonedStep;
         result.FinalVariables = VariableSnapshot.Capture(variables);
         _observer.SequenceFinished(sequence, result);
@@ -182,6 +214,82 @@ public sealed class TestSequenceRunner
 
         return result;
     }
+
+    /// <summary>
+    /// Runs a sequence's own cleanup steps - the run's, or a called sequence's at the end of the
+    /// call - as one item under <see cref="TestSequence.CleanupItemId"/>, so an observer and a result
+    /// see them where they see every other item's steps. Skipped, and recorded as skipped, when a
+    /// step was quarantined - its plugin may still hold the resources these steps would use, exactly
+    /// as for an item's cleanup. Their verdict is the sequence's: a contactor that would not open is
+    /// not a pass. True means a step's error policy asked to stop, which matters only to a call.
+    ///
+    /// A cancellation that arrives while they run does not end them: the steps not yet run follow
+    /// in the grace window, because the operator who presses Stop during the teardown still wants
+    /// the contactor open.
+    /// </summary>
+    private async Task<bool> RunSequenceCleanupAsync(
+        TestSequence sequence,
+        TestItemRunResult result,
+        IDictionary<string, object?> variables,
+        CancellationToken cancellationToken)
+    {
+        result.ItemId = TestSequence.CleanupItemId;
+        result.ItemName = "Cleanup";
+        result.StartedAt = DateTimeOffset.Now;
+        var item = new TestItemDefinition
+        {
+            Id = result.ItemId,
+            Name = result.ItemName,
+            CleanupSteps = sequence.CleanupSteps
+        };
+
+        var stepResults = new Dictionary<string, TestStepResult>(StringComparer.OrdinalIgnoreCase);
+        _observer.ItemStarted(item);
+        try
+        {
+            if (_abandonedStep)
+            {
+                foreach (var step in sequence.CleanupSteps)
+                {
+                    result.CleanupResults.Add(TestStepResult.Skipped(step.Id, step.Name,
+                        "A step did not exit in time and may still be using the run's resources."));
+                }
+
+                result.Verdict = TestVerdict.Skipped;
+                return true;
+            }
+
+            var flow = await RunSectionAsync(sequence, item, StepSection.Cleanup, sequence.CleanupSteps, result.CleanupResults, stepResults, variables, cancellationToken)
+                .ConfigureAwait(false);
+            result.Verdict = AggregateCleanupVerdict(result.CleanupResults);
+            return flow != FlowDecision.Continue;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await RunRemainingCleanupAsync(sequence, item, sequence.CleanupSteps, result.CleanupResults, stepResults, variables, cancellationToken)
+                .ConfigureAwait(false);
+            result.Verdict = TestVerdict.Cancelled;
+            throw;
+        }
+        finally
+        {
+            result.FinishedAt = DateTimeOffset.Now;
+            result.VariablesAfter = VariableSnapshot.Capture(variables);
+            _observer.ItemFinished(item, result);
+        }
+    }
+
+    /// <summary>
+    /// A cleanup section judged on its own, as the sequence's is: there is no verdict source, so
+    /// the steps are the judgment. A step that could not judge - a limit check on a unit nobody
+    /// knows - leaves the section unjudged rather than passed.
+    /// </summary>
+    private static TestVerdict AggregateCleanupVerdict(IReadOnlyCollection<TestStepResult> steps) =>
+        steps.Any(step => step.Verdict == TestVerdict.Error) ? TestVerdict.Error
+        : steps.Any(step => step.Verdict == TestVerdict.Fail) ? TestVerdict.Fail
+        : steps.All(step => step.Verdict == TestVerdict.Skipped) ? TestVerdict.Skipped
+        : steps.All(step => step.Verdict is TestVerdict.Pass or TestVerdict.Skipped) ? TestVerdict.Pass
+        : TestVerdict.Inconclusive;
 
     /// <summary>
     /// Runs items in order into <paramref name="results"/>. True means the sequence must stop - an
@@ -483,8 +591,40 @@ public sealed class TestSequenceRunner
         }
 
         result.CalledSequenceId = callee.Id;
-        return await RunItemsAsync(callee, callee.Items, result.Children, scope, callDepth + 1, cancellationToken)
-            .ConfigureAwait(false);
+        if (callee.CleanupSteps.Count == 0)
+        {
+            return await RunItemsAsync(callee, callee.Items, result.Children, scope, callDepth + 1, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // The callee's own cleanup ends the call however its items ended, in the callee's scope,
+        // as the last of the call's children: a sequence that closes a relay in its items and
+        // opens it in its cleanup must not leave it closed because it was called rather than run.
+        bool stop;
+        try
+        {
+            stop = await RunItemsAsync(callee, callee.Items, result.Children, scope, callDepth + 1, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            var cancelledCleanup = new TestItemRunResult();
+            result.Children.Add(cancelledCleanup);
+            try
+            {
+                await RunSequenceCleanupAsync(callee, cancelledCleanup, scope, CancellationGraceToken()).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // The grace period elapsed. The cancellation is what is reported, not this.
+            }
+
+            throw;
+        }
+
+        var cleanup = new TestItemRunResult();
+        result.Children.Add(cleanup);
+        return await RunSequenceCleanupAsync(callee, cleanup, scope, cancellationToken).ConfigureAwait(false) || stop;
     }
 
     private static TestItemRunResult CreateFlowErrorResult(TestItemDefinition item, string message)
@@ -547,7 +687,8 @@ public sealed class TestSequenceRunner
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             result.Verdict = TestVerdict.Cancelled;
-            await RunCleanupAfterCancellationAsync(sequence, item, result, stepResults, variables).ConfigureAwait(false);
+            await RunRemainingCleanupAsync(sequence, item, item.CleanupSteps, result.CleanupResults, stepResults, variables, cancellationToken)
+                .ConfigureAwait(false);
             throw;
         }
         finally
@@ -559,27 +700,40 @@ public sealed class TestSequenceRunner
     }
 
     /// <summary>
-    /// Runs the item's cleanup steps after the user cancelled, within <see cref="CleanupGracePeriod"/>.
+    /// Runs the cleanup steps that have not run yet after the user cancelled - all of them when
+    /// the cancellation came before the cleanup, the rest when it came during it - within
+    /// <see cref="CleanupGracePeriod"/>, a window every cleanup section of the run shares. The
+    /// step the cancellation interrupted stays recorded as cancelled and is not run again.
+    ///
     /// The grace token is deliberately not linked to the caller's token, which is already cancelled
-    /// and would abort every cleanup step at its first cancellation check. A step that was abandoned
-    /// keeps cleanup suppressed, because its resources may still be in use by the pending plugin.
+    /// and would abort every cleanup step at its first cancellation check. Nothing runs when the
+    /// steps were already on the grace token - it is the grace period that ran out - or when a step
+    /// was abandoned, because its resources may still be in use by the pending plugin.
     /// </summary>
-    private async Task RunCleanupAfterCancellationAsync(
+    private async Task RunRemainingCleanupAsync(
         TestSequence sequence,
         TestItemDefinition item,
-        TestItemRunResult result,
+        IReadOnlyList<TestStepDefinition> steps,
+        IList<TestStepResult> results,
         Dictionary<string, TestStepResult> stepResults,
-        IDictionary<string, object?> variables)
+        IDictionary<string, object?> variables,
+        CancellationToken cancelledToken)
     {
-        if (_abandonedStep || item.CleanupSteps.Count == 0 || result.CleanupResults.Count > 0)
+        // Every step of a section leaves exactly one result, so the count is how far it got.
+        if (_abandonedStep || results.Count >= steps.Count)
         {
             return;
         }
 
-        using var grace = new CancellationTokenSource(CleanupGracePeriod);
+        var grace = CancellationGraceToken();
+        if (cancelledToken == grace)
+        {
+            return;
+        }
+
         try
         {
-            await RunSectionAsync(sequence, item, StepSection.Cleanup, item.CleanupSteps, result.CleanupResults, stepResults, variables, grace.Token)
+            await RunSectionAsync(sequence, item, StepSection.Cleanup, steps.Skip(results.Count).ToList(), results, stepResults, variables, grace)
                 .ConfigureAwait(false);
         }
         catch (Exception)
@@ -599,6 +753,7 @@ public sealed class TestSequenceRunner
         IDictionary<string, object?> variables,
         CancellationToken cancellationToken)
     {
+        var cleanupDecision = FlowDecision.Continue;
         foreach (var step in steps)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -662,15 +817,30 @@ public sealed class TestSequenceRunner
                 continue;
             }
 
-            return step.OnError switch
+            var stepDecision = step.OnError switch
             {
                 ErrorHandlingMode.JumpToCleanup => FlowDecision.JumpToCleanup,
                 ErrorHandlingMode.Stop => FlowDecision.StopSequence,
                 _ => FlowDecision.StopSequence
             };
+
+            // A cleanup section runs to its end whatever a step's policy: "stop the charger" failing
+            // is the worst moment to skip "open the contactor". The policy still decides what
+            // happens after the section, through the first decision it asked for.
+            if (section == StepSection.Cleanup)
+            {
+                if (cleanupDecision == FlowDecision.Continue)
+                {
+                    cleanupDecision = stepDecision;
+                }
+
+                continue;
+            }
+
+            return stepDecision;
         }
 
-        return FlowDecision.Continue;
+        return cleanupDecision;
     }
 
     /// <summary>

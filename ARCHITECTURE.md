@@ -45,6 +45,21 @@ needs an `outputKey`, since taking a step's own verdict is what the verdict sour
 in a list beside `verdictSource` rather than replacing it because plugins read
 `TestItemDefinition` through the execution context, and an existing member cannot change.
 
+A sequence may also carry its own `cleanup` steps, run once the items are done however they
+ended - the last item finished, a step's `Stop` policy, a flow definition that could not be
+evaluated, or a cancellation. An item's cleanup restores what that item touched; opening the
+contactor and stopping the charger belong to the whole test, and before this they had to be
+copied into every item the run might stop at. They are reported as one more item under
+`TestSequence.CleanupItemId` (`$cleanup`) - to the observer, so a progress tree shows them without
+knowing they exist, and as `TestSequenceRunResult.Cleanup`, beside the item results rather than
+among them. Their verdict counts towards the sequence's: a contactor that would not open is not a
+pass. They are skipped, and each recorded as skipped with the reason, when a step was quarantined,
+exactly as an item's cleanup is. They run in the variable scope the items leave, and the validator
+checks them there. A called sequence's own cleanup ends the call the same way - however its items
+ended, in the callee's scope - as the call's last child under the same reserved id. With no
+verdict source, the steps are the judgment: one that could not judge leaves the cleanup, and so
+the sequence, `Inconclusive` rather than passed.
+
 The judgments - the verdict source and every check - decide the item together, but they cannot
 overrule the rest of it. An item is `Error` when any of its steps errored or any judgment could not
 be made, and otherwise `Fail` when any judgment failed or any step returned `Fail` - in `init`,
@@ -186,7 +201,9 @@ On step exception or timeout, the runner creates an `Error` result and applies t
 - `Continue`: continue with the next step in the same section.
 - `JumpToCleanup`: skip the rest of the current item and run cleanup.
 
-Cleanup steps run when normal execution completes and after both `Stop` and `JumpToCleanup` errors, provided the preceding plugin has exited. They also run after user cancellation, so the device under test is restored rather than left in whatever state the interrupted step produced. Cancellation cleanup runs on a fresh token bounded by `TestSequenceRunner.CleanupGracePeriod` (30 seconds by default), because the user's token is already cancelled and would abort every cleanup step immediately. A cleanup step that outlives the grace period is abandoned and the run still reports `Cancelled`. Cleanup is suppressed entirely when a previous step was quarantined, since its resources may still be in use.
+A cleanup section always runs every step, whatever their policies: a failing "stop the charger" is the worst moment to skip "open the contactor". The first policy that asked for more than `Continue` still decides what happens after the section.
+
+Cleanup steps run when normal execution completes and after both `Stop` and `JumpToCleanup` errors, provided the preceding plugin has exited. They also run after user cancellation, so the device under test is restored rather than left in whatever state the interrupted step produced. Cancellation cleanup runs on a fresh token bounded by `TestSequenceRunner.CleanupGracePeriod` (30 seconds by default), because the user's token is already cancelled and would abort every cleanup step immediately. A cancellation that arrives during a cleanup section leaves the interrupted step recorded as cancelled and runs the steps not yet run on the grace token. A cleanup step that outlives the grace period is abandoned and the run still reports `Cancelled`. The sequence's own cleanup follows the item's on the same token, so one stop costs at most one grace period. Cleanup is suppressed entirely when a previous step was quarantined, since its resources may still be in use.
 
 Step execution (including synchronous plugin code and settings loading) runs off the UI thread. The host bounds its wait by the step timeout and user cancellation. A plugin that exits more than 100 ms after cancellation is quarantined: the sequence stops without executing further steps or cleanup against the same resources. `HasPendingExecution` records this condition in the result. A host using `TestSequenceRunner` directly must await `PendingStepsCompletion` before releasing resources or reusing plugin instances, and must keep the resources alive until it completes. Resource cleanup attempts every resource and aggregates failures. A host is expected to surface a cleanup failure and stop accepting runs: the device state is unknown, and the next run would measure against it.
 

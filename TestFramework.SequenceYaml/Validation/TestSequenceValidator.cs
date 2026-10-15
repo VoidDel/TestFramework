@@ -55,7 +55,11 @@ public sealed class TestSequenceValidator
         ValidateInstruments(sequence.Instruments, issues);
         ValidateTransports(sequence.Transports, sequence.Instruments, issues);
         ValidateServices(sequence.Services, sequence.Transports, issues);
-        ValidateItems(sequence.Items, VariableValue.KnownIn(sequence), ResourceAliasesOf(sequence), issues);
+        var resourceAliases = ResourceAliasesOf(sequence);
+        var defined = ValidateItems(sequence.Items, VariableValue.KnownIn(sequence), resourceAliases, issues);
+
+        // After every item: the sequence's cleanup runs last, so it may read what any item wrote.
+        ValidateSteps(sequence.CleanupSteps, "cleanup", new HashSet<string>(StringComparer.OrdinalIgnoreCase), defined, resourceAliases, issues);
 
         return issues;
     }
@@ -91,7 +95,8 @@ public sealed class TestSequenceValidator
     /// a <i>later</i> step stays an error, which is why a step's own writes are added after its
     /// parameters have been checked.
     /// </summary>
-    private void ValidateItems(
+    /// <summary>Validates the tree and returns the variables defined once it has run.</summary>
+    private Dictionary<string, object?> ValidateItems(
         IReadOnlyList<TestItemDefinition> items,
         IReadOnlyDictionary<string, object?> knownVariables,
         ISet<string> resourceAliases,
@@ -100,6 +105,7 @@ public sealed class TestSequenceValidator
         var defined = new Dictionary<string, object?>(knownVariables, StringComparer.OrdinalIgnoreCase);
         var itemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         ValidateItemList(items, "items", defined, itemIds, resourceAliases, issues);
+        return defined;
     }
 
     /// <summary>
@@ -130,6 +136,14 @@ public sealed class TestSequenceValidator
         ICollection<ValidationIssue> issues)
     {
         ValidateId(item.Id, itemPath, "Test item ID", itemIds, issues);
+        if (string.Equals(item.Id, TestSequence.CleanupItemId, StringComparison.OrdinalIgnoreCase))
+        {
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{itemPath}.id",
+                Message = $"Test item ID '{TestSequence.CleanupItemId}' is reserved for the sequence's own cleanup steps."
+            });
+        }
 
         if (string.IsNullOrWhiteSpace(item.Name))
         {

@@ -34,4 +34,27 @@ public sealed class TestSequence
     public List<TestServiceDefinition> Services { get; set; } = [];
 
     public List<TestItemDefinition> Items { get; set; } = [];
+
+    /// <summary>
+    /// Steps that run once the items are done, however they ended: after the last item, after a
+    /// step's <c>Stop</c> policy, after a flow definition that could not be evaluated, and after
+    /// the operator cancelled. An item's own <c>cleanup</c> only restores what that item touched;
+    /// "open the contactor, stop the charger" belongs to the whole test, and before this it had to
+    /// be copied into every item that might be the one the run stops at. A called sequence's run at
+    /// the end of the call, in its own scope, as the call's last child. Every step runs whatever its
+    /// <c>onError</c>, and a cancellation during them runs the rest in the grace window.
+    ///
+    /// They are skipped when a step was quarantined, as an item's cleanup is - the abandoned
+    /// plugin may still be using the resources - and each is then recorded as skipped with that
+    /// reason. An error or a failure in them is the sequence's: a DUT left charging is not a pass.
+    /// </summary>
+    public List<TestStepDefinition> CleanupSteps { get; set; } = [];
+
+    /// <summary>
+    /// The item id under which the sequence's <see cref="CleanupSteps"/> are reported - to the
+    /// observer, in <c>TestSequenceRunResult.Cleanup</c> and in each step's execution context -
+    /// so a host's progress view shows them as one more node without knowing they exist. The
+    /// validator refuses an item that uses it.
+    /// </summary>
+    public const string CleanupItemId = "$cleanup";
 }

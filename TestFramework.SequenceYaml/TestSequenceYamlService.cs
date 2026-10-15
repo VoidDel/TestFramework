@@ -176,6 +176,11 @@ public sealed class TestSequenceYamlService
 
         public List<YamlTestItem> Items { get; set; } = [];
 
+        // Omitted when empty, so a sequence without its own cleanup saves exactly as it did before
+        // the section existed.
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitEmptyCollections | DefaultValuesHandling.OmitNull)]
+        public List<YamlTestStep> Cleanup { get; set; } = [];
+
         public TestSequence ToDomain()
         {
             return new TestSequence
@@ -189,7 +194,8 @@ public sealed class TestSequenceYamlService
                 Instruments = Instruments.Select(instrument => instrument.ToDomain()).ToList(),
                 Transports = Transports.Select(transport => transport.ToDomain()).ToList(),
                 Services = Services.Select(service => service.ToDomain()).ToList(),
-                Items = Items.Select(item => item.ToDomain()).ToList()
+                Items = Items.Select(item => item.ToDomain()).ToList(),
+                CleanupSteps = (Cleanup ?? []).Select(step => step.ToDomain()).ToList()
             };
         }
 
@@ -206,7 +212,8 @@ public sealed class TestSequenceYamlService
                 Instruments = sequence.Instruments.Select(YamlInstrument.FromDomain).ToList(),
                 Transports = sequence.Transports.Select(YamlTransport.FromDomain).ToList(),
                 Services = sequence.Services.Select(YamlTestService.FromDomain).ToList(),
-                Items = sequence.Items.Select(YamlTestItem.FromDomain).ToList()
+                Items = sequence.Items.Select(YamlTestItem.FromDomain).ToList(),
+                Cleanup = sequence.CleanupSteps.Select(YamlTestStep.FromDomain).ToList()
             };
         }
     }

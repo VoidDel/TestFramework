@@ -461,12 +461,56 @@ public sealed class TestSequenceValidator
         if (source.JudgeType == VerdictJudgeType.Numeric)
         {
             ValidateNumericBounds(source, path, definedVariables, issues);
+            ValidateUnits(source, path, issues);
         }
 
         if (source.JudgeType == VerdictJudgeType.String &&
             string.IsNullOrEmpty(source.ExpectedString))
         {
             issues.Add(new ValidationIssue { Path = $"{path}.expectedString", Message = "String verdict requires expectedString." });
+        }
+    }
+
+    /// <summary>
+    /// Checks the judgment's units against the table the runner converts with.
+    ///
+    /// A unit nobody knows is a warning, not an error: the runner answers <c>Inconclusive</c> for
+    /// it, never a wrong comparison, and the host may register the unit before any run starts. Two
+    /// declared units of different dimensions are an error - <c>sourceUnit: mV</c> against
+    /// <c>unit: ms</c> is a mistake whatever the instrument returns.
+    /// </summary>
+    private static void ValidateUnits(VerdictSource source, string path, ICollection<ValidationIssue> issues)
+    {
+        var known = true;
+        foreach (var (field, unit) in new[] { ("sourceUnit", source.SourceUnit), ("unit", source.Unit) })
+        {
+            if (string.IsNullOrWhiteSpace(unit) || MeasurementUnits.IsKnown(unit))
+            {
+                continue;
+            }
+
+            known = false;
+            issues.Add(new ValidationIssue
+            {
+                Path = $"{path}.{field}",
+                Severity = ValidationSeverity.Warning,
+                Message = $"Unit '{unit.Trim()}' is not one this framework knows, so a value converted to or from it will be judged Inconclusive. " +
+                          "A host or driver can register it with MeasurementUnits.Register."
+            });
+        }
+
+        if (known && !string.IsNullOrWhiteSpace(source.SourceUnit) && !string.IsNullOrWhiteSpace(source.Unit))
+        {
+            var sourceDimension = MeasurementUnits.DimensionOf(source.SourceUnit);
+            var targetDimension = MeasurementUnits.DimensionOf(source.Unit);
+            if (!string.Equals(sourceDimension, targetDimension, StringComparison.Ordinal))
+            {
+                issues.Add(new ValidationIssue
+                {
+                    Path = $"{path}.unit",
+                    Message = $"Unit '{source.Unit.Trim()}' ({targetDimension}) cannot be converted from sourceUnit '{source.SourceUnit.Trim()}' ({sourceDimension})."
+                });
+            }
         }
     }
 

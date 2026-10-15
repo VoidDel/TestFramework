@@ -225,8 +225,18 @@ getting it wrong means passing a DUT that should have failed:
   silent comparison in the wrong scale is exactly the failure this resolution exists to prevent.
   A value that is not a number at all is `Inconclusive` for the same reason.
 
-`Ω` normalises to `Ohm`, and both `µ` (U+00B5 MICRO SIGN) and `μ` (U+03BC GREEK SMALL LETTER MU)
-normalise to `u`, since instruments and operators produce either one.
+`Ω` normalises to `Ohm`, both `µ` (U+00B5 MICRO SIGN) and `μ` (U+03BC GREEK SMALL LETTER MU)
+normalise to `u`, and `℃` (U+2103) to `°C`, since instruments and operators produce any of them.
+
+The table is `MeasurementUnits` in Abstractions, shared with the validator - which warns about a
+unit nobody knows and rejects a `sourceUnit` and `unit` of different dimensions - and open to
+registration: a driver whose instrument reports in `Ah` registers the unit once, usually in its
+constructor, instead of converting before it returns. A definition is a dimension, a scale and an
+offset to the dimension's base (Kelvin is Celsius offset by -273.15), so conversion only ever
+happens within a dimension. Registering a symbol the table has is a no-op for the same definition
+and an error for a different one, because two plugins must not be able to disagree about `mV`.
+Symbols match case-sensitively first - `mOhm` and `MOhm` are both real - and case-insensitively
+only when that is unambiguous, so `ohm` is `Ohm` and `mohm` is nothing.
 
 #### Comparisons
 

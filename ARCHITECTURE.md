@@ -137,8 +137,39 @@ plugin runs unchanged. A plugin that uses any of them declares 1.1, so a 1.0 hos
 with a reason instead of failing on a missing member mid-run.
 
 Contract **1.2** (framework 0.6.0) added `Units` to both plugin descriptors, with the
-`MeasurementUnit` and `MeasurementUnits` types they use. A plugin that declares units, or calls
-the table, declares 1.2.
+`MeasurementUnit` and `MeasurementUnits` types they use; resource classes - `ResourceClassAttribute`,
+`ResourceClasses`, `ResourceRequirement.Class`, and `IResourcePluginCatalog.GetResourceType` with a
+default implementation; and the standard instrument classes in `TestFramework.Instruments`. A
+plugin that uses any of them declares 1.2.
+
+## Resource Classes
+
+The resource contracts name three roles - instrument, transport, service - and return `object`.
+What a resource *is* is a resource class: an interface carrying `[ResourceClass("PowerSupply")]`.
+`TestFramework.Instruments` holds the standard ones, modelled on the IVI Foundation's classes and
+cut to what every instrument of a class can do: `IPowerSupply`, `IElectronicLoad`,
+`IDigitalMultimeter`, `IDataAcquisition`, `IFunctionGenerator`, `IOscilloscope`, and the transport
+`ICanChannel`. Values are SI base units (temperature in degrees Celsius), so a step's output
+converts to any limit unit; one resource is one channel - a channel view over a multi-output
+instrument - except for the scope and the data acquisition unit, whose channels share one capture.
+
+A requirement may name a class (`requires[].class`). Three checks hold the binding to it, each
+before a run rather than at a step's cast:
+
+- the validator, given the resource catalog and the station, checks that the driver the station (or
+  its line) binds declares a type of that class (`IResourcePluginCatalog.GetResourceType`);
+- `StationResourceHost.BeginRunAsync` checks the resources actually opened for the run;
+- the resource builders check every created resource against the type its plugin declares, class
+  or no class, so the type the validator checked is the type the run gets.
+
+The steps in `TestFramework.Plugins.InstrumentSteps` ask only for the standard classes, and the
+drivers in `TestFramework.Plugins.Simulation` implement them, so the sample sequence and station
+run the whole chain without hardware; swapping in real instruments changes the station file only.
+
+`TestFramework.Instruments` is shared from the host like Abstractions. Dependencies a plugin
+folder carries are otherwise loaded once per file path, so two folders each shipping the assembly -
+which `dotnet publish` does - would hold two `IPowerSupply` types and every cast between a driver
+and a step in different folders would fail. Core references the package so every host carries it.
 
 ## Plugin Lifecycle and Trust Boundary
 

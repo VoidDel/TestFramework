@@ -81,3 +81,36 @@ BMS-TEST 的 `RunProgressModel.FindOrAdd` 按测试项 id 全局查找节点。�
   - 大小写不携带含义的写法照常可用：`OHM`、`khz`、`KWH`。
   - 原先的规则会把 `MW` 当成表里唯一的 `mW`，相差 10⁹ 倍，这是本轮发现并修掉的问题。
 - **契约升到 1.2**：插件只要用到 `MeasurementUnit` / `MeasurementUnits` 或描述符的 `Units`，就会在 0.5.x 宿主上缺类型，因此必须声明 1.2，让旧宿主在加载时明确拒绝它。10-10 那份评估里"契约仍为 1.1"的说法据此更正。
+
+**参考资源插件链已完成（同日）。** 用例从 472 增至 503，全部通过，0 警告。
+
+做之前的评估：资源契约只有仪器、传输、服务三种角色，返回值都是 `object`，存在三处硬伤：
+
+- 驱动声明的 `InstrumentType` / `TransportType` / `ServiceType` 从未被读取；
+- `ResourceRequirement` 的注释写着"按能力描述"，实际上无法表达"需要一台电源"；
+- 插件依赖按文件路径加载，驱动和步骤插件放在两个目录里时，各自带的契约程序集是两份类型，转换必然失败。
+
+本轮落实：
+
+- **资源类机制**（Abstractions，契约 1.2）：
+  - 新增 `[ResourceClass]` 与 `ResourceClasses`，`ResourceRequirement.Class` 对应 YAML 的 `requires[].class`（不写时文件逐字节不变）；
+  - `IResourcePluginCatalog.GetResourceType` 带默认实现；
+  - 校验器核对工位或产线绑定的驱动；`StationResourceHost.BeginRunAsync` 核对实际打开的资源；
+  - 资源构建器拒绝返回的对象与声明类型不符的驱动。
+- **`TestFramework.Instruments` 包**：
+  - 参照 IVI 仪器类定义七个标准类：电源、电子负载、万用表、数据采集、信号发生器、示波器、CAN 通道；
+  - 驱动可复用的 `CanFrameDispatcher`（读取器从打开起缓存，满了丢弃最旧的并计数）和 `WaveformMath`（带迟滞的过零检测）；
+  - 由宿主共享，Core 引用它。
+- **`TestFramework.Plugins.InstrumentSteps`**：12 个只认标准类的通用步骤。
+- **`TestFramework.Plugins.Simulation`**：7 个模拟驱动，带最简单的物理模型和跨资源查找。
+- **验证**：
+  - `Samples/instrument-*.yaml` 覆盖全部七类，由用例端到端跑通；
+  - 另有一个用例把步骤和驱动放进两个插件目录、各带一份 `TestFramework.Instruments.dll` 加载，同样通过；
+  - 临时把该程序集移出共享列表后，这个用例失败，证明它确实在检验共享。
+- **CI / 发布**：打包数从 4 增至 5，暂存并打包 `InstrumentSteps`、`Simulation` 两个插件目录。
+
+仍待处理：
+
+- BMS-TEST 的部署脚本需要把新的两个插件目录同步进 `Plugins/`；
+- 第一个真实驱动（CAN 卡或电源）写出来之后，标准接口是否够用，才算被真正检验过；
+- 领域协议（UDS、BMS 信号解码）应作为 `CanChannel` 之上的服务层，放在领域插件仓库。

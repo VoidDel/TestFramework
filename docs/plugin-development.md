@@ -4,12 +4,13 @@
 
 ## 1. 交付物划分
 
-框架发布四个 NuGet 包，插件仓库按需引用：
+框架发布五个 NuGet 包，插件仓库按需引用：
 
 | 包 | 用途 | 插件是否引用 |
 |---|---|---|
 | `TestFramework.Abstractions` | 插件契约：步骤插件、资源插件、执行上下文、结果模型 | **是**，唯一必需 |
 | `TestFramework.Plugin.Abstractions.UI` | 设置界面契约（Avalonia） | 仅当插件提供配置界面 |
+| `TestFramework.Instruments` | 标准仪器类：电源、负载、万用表、数据采集、信号发生器、示波器、CAN 通道 | 仪器驱动和驱动仪器的步骤插件 |
 | `TestFramework.Core` | 序列运行器、插件加载、资源管理 | 否，宿主才引用 |
 | `TestFramework.SequenceYaml` | 序列文件读写与校验 | 否，宿主才引用 |
 
@@ -62,7 +63,7 @@ using TestFramework.Abstractions.Plugins;
 [assembly: TestFrameworkPlugin("1.0")]
 ```
 
-只用到 1.0 成员的插件声明 1.0，能被任何 0.x 宿主加载；用到 `IsThreadSafe`、`StepParameterKind.Expression` 或 `context.Operator` 的插件声明 `"1.1"`（框架 0.5.0 起提供）；在描述符里声明 `Units`、或用到 `MeasurementUnit` / `MeasurementUnits` 的插件声明 `"1.2"`（框架 0.6.0 起提供）。
+只用到 1.0 成员的插件声明 1.0，能被任何 0.x 宿主加载；用到 `IsThreadSafe`、`StepParameterKind.Expression` 或 `context.Operator` 的插件声明 `"1.1"`（框架 0.5.0 起提供）；在描述符里声明 `Units`、用到 `MeasurementUnit` / `MeasurementUnits`、`ResourceClassAttribute`，或实现/使用 `TestFramework.Instruments` 标准仪器类的插件声明 `"1.2"`（框架 0.6.0 起提供）。
 
 宿主在**实例化任何类型之前**读取这个声明。声明高于宿主能提供的版本时，整个程序集被拒绝并记录一条明确的失败信息，插件代码一行都不会执行 —— 而不是等到运行到一半抛 `MissingMethodException`。
 
@@ -224,7 +225,57 @@ var response = await context.Operator.PromptAsync(
 
 `AllowVariableReference` 默认为 `true`。参数值写成 `${name}` 时，实际取值要到运行时才知道，因此类型与范围检查对该参数暂停，改为检查变量本身是否已定义；必须在运行前确定的参数把它设为 `false`。
 
-## 5. 实现设置界面
+## 5. 实现仪器驱动
+
+仪器驱动是资源插件：`IInstrumentDriverPlugin`（传输层用 `ITransportPlugin`，协议服务用 `ITestServicePlugin`）。驱动返回的对象实现 `TestFramework.Instruments` 里的标准仪器类接口时，任何只认标准类的步骤都能用它，序列也能在 `requires` 里写 `class:` 让校验器和工位在运行前核对。
+
+```csharp
+using TestFramework.Abstractions.Models;
+using TestFramework.Abstractions.Resources;
+using TestFramework.Instruments;
+
+public sealed class AcmePsuDriver : IInstrumentDriverPlugin
+{
+    public ResourcePluginDescriptor Descriptor { get; } = new()
+    {
+        PluginId = "acme.psu",
+        DisplayName = "Acme PS-3000 电源",
+        Version = new Version(1, 0, 0),
+        Category = "电源"
+    };
+
+    // 必须是 CreateAsync 返回对象的类型（或其基类/接口）：校验器按它核对 requires 的 class，
+    // 资源构建器拒绝返回别的类型的驱动。
+    public Type InstrumentType => typeof(AcmePsu);
+
+    public async Task<object> CreateAsync(InstrumentDefinition definition, IResourceScope resources, CancellationToken cancellationToken)
+    {
+        // definition.Resource 是工位文件里的地址（"COM7"、VISA 资源串），definition.Settings 是驱动自己的设置。
+        var psu = new AcmePsu(definition.Resource);
+        await psu.OpenAsync(cancellationToken);
+        return psu;
+    }
+}
+
+public sealed class AcmePsu : IPowerSupply, IAsyncDisposable
+{
+    // 实现 IPowerSupply 的每个成员。数值一律用 SI 基本单位（V、A）。
+    // ...
+    public ValueTask DisposeAsync() => /* 关闭会话 */ ValueTask.CompletedTask;
+}
+```
+
+要点：
+
+- **csproj** 同时引用 `TestFramework.Abstractions` 与 `TestFramework.Instruments`，程序集声明 `[assembly: TestFrameworkPlugin("1.2")]`。两者都由宿主共享，插件目录里的副本会被忽略，所以驱动和步骤插件放在不同目录也能对上同一个接口类型。
+- **一个资源一路**：多路电源每路一个资源。工位文件里每路绑一个"通道视图"驱动，在 `CreateAsync` 里通过 `resources.Instruments.GetRequired<...>` 找到母机，返回只管自己那一路的 `IPowerSupply`。示波器和数据采集仪是整台一个资源。
+- **厂商特有功能**放到驱动自己定义的接口上（比如 `IAcmeSequencer`），让 `AcmePsu` 同时实现它；需要它的步骤先按 `IPowerSupply` 取资源，再 `TryGet<IAcmeSequencer>`。不要往标准接口里塞。
+- **释放**：资源实现 `IDisposable` 或 `IAsyncDisposable` 时，作用域结束时会释放它。工位级资源跨运行保持打开，只在工位关闭或出错重建时释放。
+- **取消**：每个方法都带 `CancellationToken`，驱动必须响应它，且不能留下发了一半的命令。
+- **CAN 驱动**可以直接用 `CanFrameDispatcher`：接收线程把每帧交给 `Publish`，`OpenReader` 返回 `dispatcher.OpenReader(filter)`，就满足了"读取器从打开起缓存"的保证。没有自带测量功能的示波器驱动可以用 `WaveformMath` 从波形计算测量值。
+- **参考实现**是 `TestFramework.Plugins.Simulation`：每个标准类一个模拟驱动，含跨资源查找（万用表跟随电源、示波器接信号发生器）。
+
+## 6. 实现设置界面
 
 > 先看上一节：声明了参数就已经有一套可用表单，这一节只针对确实需要定制控件的情况。
 
@@ -248,7 +299,7 @@ public sealed class MyStepEditorPlugin : IStepSettingsEditorPlugin
 
 `context` 若可转为 `IParameterBindingEditContext`，还能读取序列变量并直接读写原始参数，用于支持变量绑定。
 
-## 6. 部署布局
+## 7. 部署布局
 
 宿主扫描自己的 `Plugins` 目录（含子目录）：
 
@@ -269,14 +320,14 @@ Plugins/
 - `TestFramework.Abstractions`、`TestFramework.Plugin.Abstractions.UI` 以及全部 `Avalonia.*` 程序集由宿主共享：即使它们随 `dotnet publish` 一起出现在插件目录里，也会被忽略并解析到宿主的版本。插件必须针对宿主提供的这些版本编译。共享 Avalonia 不是可选项——设置界面契约的 `CreateEditor` 返回 Avalonia 的 `Control`，插件私有的另一份 Avalonia 会让这个类型身份不一致，整个程序集报"没有实现"而无法加载。
 - 同一目录里被多个程序集共同依赖的文件（典型的是 `MyPlugin.UI.dll` 依赖 `MyPlugin.dll`）在整个进程中只加载一份，所以设置界面拿到的设置对象与运行时插件创建的是同一个类型。
 
-## 7. 生命周期限制
+## 8. 生命周期限制
 
 - 插件程序集加载后**无法卸载**。更新插件 DLL 必须重启宿主，运行期间文件处于占用状态。
 - **资源插件可能跨多次运行存活。** 工位配置里标记为 `shared`（默认）的资源由 `StationResourceHost` 在宿主启动时建立、关闭时释放，中间连续测多个 DUT 都是同一个实例。驱动因此必须能被反复使用而不残留上一个 DUT 的状态；确实做不到的，在工位配置里把该项设为 `shared: false`，它就恢复为每次运行重建。
 - 一次运行以 `Error` 结束后，工位共享资源会被标记为待重建，下一次运行前重新打开。
 - 插件代码以宿主权限在同一进程内运行，加载不做签名或哈希校验。对插件目录的写权限等同于以当前用户身份执行代码。只读的资源契约防的是误用，不是沙箱。
 
-## 8. 本地调试
+## 9. 本地调试
 
 插件仓库里引用框架包的正式版本即可开发。需要对着未发布的框架改动调试时，在插件仓库根目录放一个 `nuget.config` 指向本地包目录：
 

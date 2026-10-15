@@ -20,6 +20,8 @@ TestFramework 是一个基于 .NET 的自动化测试框架核心。它用 YAML 
 - 结果追溯：被测设备序列号、操作员、工位、序列版本与文件哈希、框架版本、实际运行的插件版本、每个测量值及其限值
 - 带版本号的结果 JSON 格式（`TestResultJson`），可写可读
 - 内置基础步骤插件（延时、日志、限值检查、计算、操作员确认等），按插件方式构建与交付
+- 标准仪器类（`TestFramework.Instruments`）：直流电源、电子负载、万用表、数据采集、信号发生器、示波器、CAN 通道；序列用 `requires[].class` 声明要哪一类，校验器与工位在运行前核对绑定的驱动
+- 通用仪器步骤与模拟驱动插件：只认标准仪器类，不认厂商；配一个模拟工位即可在没有硬件时跑通整条链
 
 ## 项目结构
 
@@ -29,6 +31,9 @@ TestFramework 是一个基于 .NET 的自动化测试框架核心。它用 YAML 
 - `TestFramework.Plugin.Abstractions.UI`：测试步骤设置编辑器 UI 契约。
 - `TestFramework.Plugins.BasicSteps`：基础测试步骤插件，按插件方式构建，不编译进任何宿主。
 - `TestFramework.Plugins.BasicSteps.UI`：上述插件的设置界面。
+- `TestFramework.Instruments`：标准仪器类接口（电源、负载、万用表、数据采集、信号发生器、示波器、CAN 通道）及驱动可复用的 CAN 读取分发器、波形测量；由宿主共享给所有插件目录。
+- `TestFramework.Plugins.InstrumentSteps`：通用仪器步骤插件（`psu.*`、`load.*`、`dmm.measure`、`daq.scan`、`fgen.set`、`scope.*`、`can.*`）。
+- `TestFramework.Plugins.Simulation`：上述各类的模拟驱动（`sim.*`），用于开发、演示和无硬件的回归测试。
 - `TestFramework.Tests`：核心逻辑单元测试。
 
 ## 环境要求
@@ -51,11 +56,14 @@ dotnet test TestFramework.sln
 |---|---|---|
 | `TestFramework.Abstractions` | `artifacts/*.nupkg` | 插件仓库 `PackageReference` |
 | `TestFramework.Plugin.Abstractions.UI` | `artifacts/*.nupkg` | 提供配置界面的插件仓库 `PackageReference` |
+| `TestFramework.Instruments` | `artifacts/*.nupkg` | 仪器驱动与仪器步骤插件仓库 `PackageReference`；宿主经 Core 间接引用 |
 | `TestFramework.Core` | `artifacts/*.nupkg` | 宿主 `PackageReference` |
 | `TestFramework.SequenceYaml` | `artifacts/*.nupkg` | 宿主 `PackageReference` |
 | 内置步骤插件 DLL | `artifacts/plugins/BasicSteps/` | 宿主按文件复制到自己的 `Plugins/` 目录 |
+| 通用仪器步骤插件 DLL | `artifacts/plugins/InstrumentSteps/` | 同上，驱动仪器的工位才需要 |
+| 模拟驱动插件 DLL | `artifacts/plugins/Simulation/` | 同上，无硬件的开发机、演示与回归测试 |
 
-内置插件不发包：宿主对插件不能有任何编译期依赖，也就没有可引用的东西。`dotnet build` 会把这两个 DLL 暂存到 `artifacts/plugins/BasicSteps`，发布流水线把同一个目录打成 zip 随 release 发出，宿主从这里取。
+插件不发包：宿主对插件不能有任何编译期依赖，也就没有可引用的东西。`dotnet build` 把各插件的 DLL 暂存到 `artifacts/plugins/<名称>`，发布流水线把每个目录各打一个 zip 随 release 发出，宿主从这里取。
 
 宿主如何消费这些交付物，见 `BMS-TEST` 仓库的 `nuget.config`、`Directory.Build.props` 与 `tools/sync-framework.ps1`。
 
@@ -376,6 +384,83 @@ var station = new StationResourceHost(stationConfig, resourcePlugins,
 - 一个步骤要多把跨进程锁时，按 `lockName` 的全局顺序获取——不能按别名，因为不同工位可能给同一台仪器起不同的名字。
 - **它不让连接变得可共享。** VISA（GPIB / LAN / USB-TMC）一般允许多个进程同时持有会话，这种仪器加锁即可；串口同一时刻只能被一个进程打开，不能这样共用。
 
+## 仪器类与参考插件
+
+资源插件只有"仪器 / 传输 / 服务"三种**角色**；一台电源和一台万用表都是"仪器"。为了让步骤只认"它是一台电源"而不认"它是某厂某型号"，`TestFramework.Instruments` 定义了一组**标准仪器类**，参照 IVI 基金会的仪器类规范（IviDCPwr、IviDmm、IviFgen、IviScope），只保留同类仪器都能做的操作：
+
+| 类（`class`） | 接口 | 一个资源是 | 主要操作 |
+|---|---|---|---|
+| `PowerSupply` | `IPowerSupply` | 一路输出 | 电压、限流、过压保护、输出开关、回读电压/电流、恒压/恒流状态 |
+| `ElectronicLoad` | `IElectronicLoad` | 一路输入 | 恒流/恒压/恒阻/恒功率、输入开关、回读 |
+| `DigitalMultimeter` | `IDigitalMultimeter` | 一台表 | 按测量功能读一次（直流/交流电压电流、两线/四线电阻、频率、温度），可指定量程 |
+| `DataAcquisition` | `IDataAcquisition` | 一台采集仪 | 一次扫描多个通道 |
+| `FunctionGenerator` | `IFunctionGenerator` | 一路输出 | 波形、频率、峰峰值、偏置、占空比、输出开关 |
+| `Oscilloscope` | `IOscilloscope` | 一台示波器（各通道共用触发） | 通道、采集、边沿触发、采集波形、测量 |
+| `CanChannel` | `ICanChannel`（传输） | 一个 CAN / CAN FD 通道 | 发帧；先开读取器再发请求，读取器从打开起缓存匹配的帧 |
+
+约定：
+
+- **数值一律用 SI 基本单位**（V、A、Ohm、W、Hz、s），温度用 °C。步骤的输出因此可以直接配 `sourceUnit` 判到 mV、mA、kOhm 的限值。
+- **一个资源一路**：三路电源是三个资源，每个资源是一个通道视图（见上文"按通道拆分"），步骤从不需要传通道号。示波器和数据采集仪例外，因为它们的通道共用一次采集。
+- 厂商特有的功能放在驱动自己的接口上，步骤先按标准类取到资源，再 `TryGet` 驱动接口。
+- 这些接口属于插件契约（1.2），同样只增不改：以后新增的成员必须带默认实现。
+
+序列在 `requires` 里写上要哪一类：
+
+```yaml
+requires:
+- alias: psu
+  kind: InstrumentDriver
+  class: PowerSupply
+- alias: can
+  kind: Transport
+  class: CanChannel
+```
+
+不写 `class` 的序列行为不变，保存后也逐字节不变。写了的话，绑定的驱动在三个地方被核对，各自在运行开始前拦下"把万用表绑到了电源别名上"这类错误：
+
+- **校验器**：拿到资源插件目录和工位配置时，检查工位（或产线）给这个别名绑定的驱动声明的类型（`InstrumentType` / `TransportType`）是否属于该类。
+- **工位**：`BeginRunAsync` 建好本次运行的作用域后，检查实际打开的资源是否属于该类。
+- **资源构建**：任何驱动的 `CreateAsync` 返回的对象都必须是它声明的类型。这一条与 `class` 无关，对所有驱动都生效：它保证校验器核对过的类型就是运行时拿到的类型。
+
+类名是接口上的 `[ResourceClass("PowerSupply")]`。领域仓库可以用同样的方式定义自己的类，比如电芯模拟器。
+
+### 通用仪器步骤（`TestFramework.Plugins.InstrumentSteps`）
+
+| 步骤 | 作用 | 主要输出 |
+|---|---|---|
+| `psu.set` | 设电压、限流、过压保护、输出开关；没给的保持不变 | `outputEnabled`、`mode`；要求打开输出却没打开（如保护已跳）判 `Fail` |
+| `psu.measure` | 回读电源 | `voltage`、`current`、`power`、`mode` |
+| `load.set` / `load.measure` | 设负载模式与设定值、输入开关 / 回读 | `voltage`、`current`、`power` |
+| `dmm.measure` | 万用表读一次 | `value`、`unit` |
+| `daq.scan` | 扫描多通道，`Channels: 101-132` 或逗号列表 | `values`（按通道的字典）、`min`、`max`、`spread` |
+| `fgen.set` | 设波形并开关输出 | — |
+| `scope.setup` | 配通道、采集、触发，给了哪部分就配哪部分 | — |
+| `scope.measure` | 采集一次并测量，每个测量项一个输出 | `frequency`、`dutyCycle`…，`units`；可选 `samples` |
+| `can.send` | 发一帧 | — |
+| `can.request` | 发一帧并等响应；读取器在发送前打开，响应再快也不会丢 | `data`、`bytes`、`responseId`、`latencyMs`；超时或与 `Expect` 不符判 `Fail` |
+| `can.expect` | 等 DUT 主动发出的帧（状态广播、心跳） | 同上 |
+
+每个步骤用 `Resource` 参数指定别名，只按标准类取资源。步骤本身不保存状态，声明为线程安全；仪器不能被并发访问时，照常在步骤上写 `exclusive: [psu]`。`Expect` 是从首字节开始按前缀比较的十六进制字节，`??` 表示任意字节。
+
+### 模拟驱动（`TestFramework.Plugins.Simulation`）
+
+每个标准类都有一个模拟驱动：`sim.psu`、`sim.load`、`sim.dmm`、`sim.daq`、`sim.fgen`、`sim.scope`，以及传输层的 `sim.can`。它们都带着最简单的物理模型：
+
+- 电源接一个电阻负载，超过限流时转恒流，超过过压保护时关断；
+- 负载接一节有内阻的电池；
+- 万用表可以通过 `Follows: psu` 读那台电源的输出；
+- 示波器的 `Inputs` 可以把通道接到一台模拟信号发生器上；
+- CAN 通道按 `Responses` 回应请求，按 `Broadcast` 周期发帧。
+
+[Samples/instrument-sequence.yaml](Samples/instrument-sequence.yaml) 配 [Samples/instrument-station.yaml](Samples/instrument-station.yaml) 覆盖全部七类：上电、万用表复核、放电、单体电压扫描、PWM 频率与占空比、UDS 会话请求、BMS 状态广播，以及序列级 `cleanup` 断电。这对文件就是 [InstrumentChainTests.cs](TestFramework.Tests/InstrumentChainTests.cs) 跑的那一份；其中一个用例把步骤插件和模拟驱动分别放进两个插件目录加载，证明跨目录也能对上同一个 `IPowerSupply`。
+
+换成真实仪器时，只改工位文件里的 `driverId`、`resource` 和 `settings`，序列不动。
+
+### 跨插件目录共享
+
+`TestFramework.Instruments` 和 Abstractions 一样**由宿主共享**。宿主经 `TestFramework.Core` 间接引用它，插件目录里自带的副本会被忽略。否则每个插件目录各加载一份，驱动返回的 `IPowerSupply` 和步骤要的 `IPowerSupply` 就是两个类型，转换必然失败。驱动和仪器步骤插件都按 `PackageReference` 引用它，并声明契约 1.2。
+
 ## 内置步骤
 
 | 插件 | 作用 |
@@ -408,6 +493,6 @@ var station = new StationResourceHost(stationConfig, resourcePlugins,
 - 插件程序集用 `[assembly: TestFrameworkPlugin("1.0")]` 声明所需的**最低框架契约版本**。宿主在实例化任何类型之前读取该声明，版本高于宿主能提供的直接拒绝整个程序集并给出明确原因，插件代码一行都不会执行。未声明的按基线 1.0 处理。
 - 契约版本与包版本无关：包按自己的节奏发布，契约版本只在插件所面对的接口变化时才动。
 - 框架承诺**高版本兼容低版本插件**：已有插件接口新增成员必须带默认实现，已有成员签名与语义永不改变；做不到的变更即为新的主契约版本。
-- 当前契约为 **1.2**（框架 0.6.0 起）。1.1 新增：`ITestStepPlugin.IsThreadSafe`（默认 `false`）、`StepParameterKind.Expression`、`TestStepExecutionContext.Operator`（框架 0.5.0 起）。1.2 新增：描述符的 `Units` 与 `MeasurementUnit` / `MeasurementUnits`。只用到 1.0 成员的插件无需改动；用到新成员的插件声明它需要的版本，如 `[assembly: TestFrameworkPlugin("1.2")]`，这样旧宿主会在加载时明确拒绝它，而不是运行到一半才缺成员。
+- 当前契约为 **1.2**（框架 0.6.0 起）。1.1 新增：`ITestStepPlugin.IsThreadSafe`（默认 `false`）、`StepParameterKind.Expression`、`TestStepExecutionContext.Operator`（框架 0.5.0 起）。1.2 新增：描述符的 `Units` 与 `MeasurementUnit` / `MeasurementUnits`；`ResourceClassAttribute` / `ResourceClasses`、`ResourceRequirement.Class`、`IResourcePluginCatalog.GetResourceType`（带默认实现）；`TestFramework.Instruments` 的标准仪器类。只用到 1.0 成员的插件无需改动；用到新成员的插件声明它需要的版本，如 `[assembly: TestFrameworkPlugin("1.2")]`，这样旧宿主会在加载时明确拒绝它，而不是运行到一半才缺成员。
 
 插件开发详见 [docs/plugin-development.md](docs/plugin-development.md)，更多架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。

@@ -16,6 +16,8 @@
     <ProjectReference Include="..\TestFramework.Plugin.Abstractions.UI\TestFramework.Plugin.Abstractions.UI.csproj" />
     <ProjectReference Include="..\TestFramework.Plugins.BasicSteps\TestFramework.Plugins.BasicSteps.csproj" />
     <ProjectReference Include="..\TestFramework.Instruments\TestFramework.Instruments.csproj" />
+    <ProjectReference Include="..\TestFramework.Plugins.InstrumentSteps\TestFramework.Plugins.InstrumentSteps.csproj" />
+    <ProjectReference Include="..\TestFramework.Plugins.Simulation\TestFramework.Plugins.Simulation.csproj" />
     <ProjectReference Include="..\TestFramework.SequenceYaml\TestFramework.SequenceYaml.csproj" />
   </ItemGroup>
 

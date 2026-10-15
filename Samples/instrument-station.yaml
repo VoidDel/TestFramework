@@ -1,0 +1,58 @@
+schemaVersion: 1
+stationId: sim-bench
+name: 模拟仪器工位
+resources:
+- alias: psu
+  kind: InstrumentDriver
+  driverId: sim.psu
+  driverVersion: 1.0.0
+  resource: SIM
+  settings:
+    LoadResistance: 100
+- alias: dmm
+  kind: InstrumentDriver
+  driverId: sim.dmm
+  driverVersion: 1.0.0
+  resource: SIM
+  settings:
+    Follows: psu
+- alias: load
+  kind: InstrumentDriver
+  driverId: sim.load
+  driverVersion: 1.0.0
+  resource: SIM
+  settings:
+    SourceVoltage: 3.7
+    SourceResistance: 0.05
+- alias: daq
+  kind: InstrumentDriver
+  driverId: sim.daq
+  driverVersion: 1.0.0
+  resource: SIM
+  settings:
+    Value: 3.3
+    Step: 0.0005
+- alias: fgen
+  kind: InstrumentDriver
+  driverId: sim.fgen
+  driverVersion: 1.0.0
+  resource: SIM
+- alias: scope
+  kind: InstrumentDriver
+  driverId: sim.scope
+  driverVersion: 1.0.0
+  resource: SIM
+  settings:
+    Inputs:
+      CH1: fgen
+- alias: can
+  kind: Transport
+  driverId: sim.can
+  driverVersion: 1.0.0
+  resource: SIM
+  settings:
+    Responses:
+      0x7E0: 0x7E8 06 50 03 00 32 01 F4
+    Broadcast:
+      0x18FF50E5: 64 00 0C 80
+    BroadcastIntervalMs: 20

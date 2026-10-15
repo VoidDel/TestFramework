@@ -1,0 +1,254 @@
+schemaVersion: 1
+id: bms-instrument-demo
+name: 仪器类与模拟驱动演示
+version: '1.0'
+requires:
+- alias: psu
+  kind: InstrumentDriver
+  class: PowerSupply
+  description: 给 BMS 供电的直流电源
+- alias: dmm
+  kind: InstrumentDriver
+  class: DigitalMultimeter
+  description: 复核供电电压的万用表
+- alias: load
+  kind: InstrumentDriver
+  class: ElectronicLoad
+  description: 放电用电子负载
+- alias: daq
+  kind: InstrumentDriver
+  class: DataAcquisition
+  description: 单体电压采集
+- alias: fgen
+  kind: InstrumentDriver
+  class: FunctionGenerator
+  description: 给 BMS 的 PWM 输入
+- alias: scope
+  kind: InstrumentDriver
+  class: Oscilloscope
+  description: 观察 PWM 波形
+- alias: can
+  kind: Transport
+  class: CanChannel
+  description: BMS 的 CAN 通道
+items:
+- id: power-up
+  name: 上电
+  verdictSource:
+    name: 供电电压
+    stepId: measure-supply
+    outputKey: voltage
+    judgeType: Numeric
+    lowerLimit: 11.9
+    upperLimit: 12.1
+    sourceUnit: V
+    unit: V
+  checks:
+  - name: 静态电流
+    stepId: measure-supply
+    outputKey: current
+    judgeType: Numeric
+    comparison: LE
+    upperLimit: 150
+    sourceUnit: A
+    unit: mA
+  main:
+  - id: supply-on
+    name: 打开 12 V 供电
+    pluginId: psu.set
+    pluginVersion: 1.0.0
+    exclusive:
+    - psu
+    parameters:
+      Resource: psu
+      Voltage: 12.0
+      CurrentLimit: 1.0
+      OverVoltageProtection: 13.0
+      Output: On
+  - id: measure-supply
+    name: 回读电源
+    pluginId: psu.measure
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: psu
+- id: supply-by-dmm
+  name: 万用表复核供电电压
+  verdictSource:
+    stepId: dmm-read
+    outputKey: value
+    judgeType: Numeric
+    lowerLimit: 11900
+    upperLimit: 12100
+    sourceUnit: V
+    unit: mV
+  main:
+  - id: dmm-read
+    name: 测直流电压
+    pluginId: dmm.measure
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: dmm
+      Function: DcVoltage
+      Range: 20.0
+- id: discharge
+  name: 2 A 放电端电压
+  verdictSource:
+    stepId: load-read
+    outputKey: voltage
+    judgeType: Numeric
+    lowerLimit: 3.55
+    upperLimit: 3.65
+    sourceUnit: V
+    unit: V
+  main:
+  - id: load-on
+    name: 恒流 2 A 放电
+    pluginId: load.set
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: load
+      Mode: ConstantCurrent
+      Level: 2.0
+      Input: On
+  - id: load-read
+    name: 回读负载
+    pluginId: load.measure
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: load
+- id: cell-voltages
+  name: 单体电压
+  verdictSource:
+    name: 单体电压
+    stepId: scan
+    outputKey: values
+    judgeType: Numeric
+    lowerLimit: 3.29
+    upperLimit: 3.31
+    sourceUnit: V
+    unit: V
+  checks:
+  - name: 最大压差
+    stepId: scan
+    outputKey: spread
+    judgeType: Numeric
+    comparison: LE
+    upperLimit: 5
+    sourceUnit: V
+    unit: mV
+  main:
+  - id: scan
+    name: 扫描 8 路单体
+    pluginId: daq.scan
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: daq
+      Channels: 101-108
+      Function: DcVoltage
+- id: pwm-input
+  name: PWM 输入
+  verdictSource:
+    name: 频率
+    stepId: pwm-measure
+    outputKey: frequency
+    judgeType: Numeric
+    lowerLimit: 990
+    upperLimit: 1010
+    sourceUnit: Hz
+    unit: Hz
+  checks:
+  - name: 占空比
+    stepId: pwm-measure
+    outputKey: dutyCycle
+    judgeType: Numeric
+    lowerLimit: 29
+    upperLimit: 31
+    sourceUnit: '%'
+    unit: '%'
+  main:
+  - id: pwm-on
+    name: 输出 1 kHz 30 % PWM
+    pluginId: fgen.set
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: fgen
+      Shape: Square
+      Frequency: 1000.0
+      Amplitude: 5.0
+      Offset: 2.5
+      DutyCycle: 30.0
+      Output: On
+  - id: scope-setup
+    name: 设置示波器
+    pluginId: scope.setup
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: scope
+      Channel: CH1
+      Range: 10.0
+      Offset: 2.5
+      SampleRate: 1000000.0
+      RecordLength: 10000
+      TriggerSource: CH1
+      TriggerLevel: 2.5
+  - id: pwm-measure
+    name: 测频率与占空比
+    pluginId: scope.measure
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: scope
+      Channel: CH1
+      Measurements: Frequency,DutyCycle
+- id: diagnostic-session
+  name: 进入扩展诊断会话
+  verdictSource:
+    stepId: session
+  main:
+  - id: session
+    name: UDS 10 03
+    pluginId: can.request
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: can
+      Id: 0x7E0
+      Data: 02 10 03
+      ResponseId: 0x7E8
+      Expect: 06 50 03
+      TimeoutMs: 100
+- id: bms-status
+  name: BMS 状态广播
+  verdictSource:
+    stepId: status
+  main:
+  - id: status
+    name: 等待状态帧
+    pluginId: can.expect
+    pluginVersion: 1.0.0
+    parameters:
+      Resource: can
+      Id: 0x18FF50E5
+      Expect: 64 ?? ?? 80
+      TimeoutMs: 500
+cleanup:
+- id: supply-off
+  name: 关闭供电
+  pluginId: psu.set
+  pluginVersion: 1.0.0
+  parameters:
+    Resource: psu
+    Output: Off
+- id: load-off
+  name: 关闭负载
+  pluginId: load.set
+  pluginVersion: 1.0.0
+  parameters:
+    Resource: load
+    Input: Off
+- id: pwm-off
+  name: 关闭 PWM
+  pluginId: fgen.set
+  pluginVersion: 1.0.0
+  parameters:
+    Resource: fgen
+    Shape: Square
+    Output: Off

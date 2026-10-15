@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- A plugin ships as a DLL dropped into a host's plugin folder, never as a package
+         reference, so nothing can take a compile-time dependency on it. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TestFramework.Abstractions\TestFramework.Abstractions.csproj" />
+    <ProjectReference Include="..\TestFramework.Instruments\TestFramework.Instruments.csproj" />
+  </ItemGroup>
+
+  <!--
+    Staged into artifacts/plugins/Simulation, the folder a host copies from and the release zips.
+    Only this assembly: Abstractions and Instruments are shared from the host
+    (PluginAssemblyLoadContext.IsSharedWithHost), so copies here would be ignored at best.
+  -->
+  <Target Name="StageSimulationPluginPackage" AfterTargets="Build">
+    <ItemGroup>
+      <SimulationPluginFile Include="$(OutDir)TestFramework.Plugins.Simulation.dll" />
+      <SimulationPluginFile Include="$(OutDir)TestFramework.Plugins.Simulation.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SimulationPluginFile)"
+          DestinationFolder="$(MSBuildThisFileDirectory)..\artifacts\plugins\Simulation"
+          SkipUnchangedFiles="true"
+          Condition="Exists('%(FullPath)')" />
+  </Target>
+</Project>

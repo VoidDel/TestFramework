@@ -9,5 +9,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\TestFramework.Abstractions\TestFramework.Abstractions.csproj" />
+    <!-- Not for Core's own use: the instrument classes are shared from the host into every plugin
+         folder (PluginAssemblyLoadContext.IsSharedWithHost), so every host must carry them, and a
+         host gets everything Core depends on. -->
+    <ProjectReference Include="..\TestFramework.Instruments\TestFramework.Instruments.csproj" />
   </ItemGroup>
 </Project>

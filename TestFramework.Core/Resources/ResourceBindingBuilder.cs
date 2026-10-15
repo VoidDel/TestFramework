@@ -34,7 +34,9 @@ internal static class ResourceBindingBuilder
             using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             target.RegisterInstrument(
                 binding.Alias,
-                await plugin.CreateAsync(binding.ToInstrumentDefinition(), target.Scope, cancellationToken).ConfigureAwait(false));
+                ResourceTypeCheck.Created(
+                    await plugin.CreateAsync(binding.ToInstrumentDefinition(), target.Scope, cancellationToken).ConfigureAwait(false),
+                    plugin.InstrumentType, binding.DriverId, binding.Alias));
         }
 
         foreach (var binding in ordered.Where(binding => binding.Kind == ResourcePluginKind.Transport))
@@ -43,7 +45,9 @@ internal static class ResourceBindingBuilder
             using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             target.RegisterTransport(
                 binding.Alias,
-                await plugin.CreateAsync(binding.ToTransportDefinition(), target.Scope, cancellationToken).ConfigureAwait(false));
+                ResourceTypeCheck.Created(
+                    await plugin.CreateAsync(binding.ToTransportDefinition(), target.Scope, cancellationToken).ConfigureAwait(false),
+                    plugin.TransportType, binding.DriverId, binding.Alias));
         }
 
         foreach (var binding in ordered.Where(binding => binding.Kind == ResourcePluginKind.Service))
@@ -52,7 +56,9 @@ internal static class ResourceBindingBuilder
             using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             target.RegisterService(
                 binding.Alias,
-                await plugin.CreateAsync(binding.ToServiceDefinition(), target.Scope, cancellationToken).ConfigureAwait(false));
+                ResourceTypeCheck.Created(
+                    await plugin.CreateAsync(binding.ToServiceDefinition(), target.Scope, cancellationToken).ConfigureAwait(false),
+                    plugin.ServiceType, binding.DriverId, binding.Alias));
         }
     }
 }

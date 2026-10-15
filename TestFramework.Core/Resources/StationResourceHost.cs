@@ -120,6 +120,10 @@ public sealed class StationResourceHost : IAsyncDisposable
                     run,
                     UnsharedBindingsFor(sequence),
                     cancellationToken).ConfigureAwait(false);
+
+                // Last, against everything the run can reach - its own, the station's, the line's -
+                // so a multimeter bound where the sequence needs a supply stops here, not at a cast.
+                ResourceTypeCheck.EnsureClasses(sequence.Requires, run.Scope);
             }
             catch (Exception buildError)
             {

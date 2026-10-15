@@ -67,6 +67,14 @@ public sealed class ResourcePluginRegistry : IResourcePluginCatalog
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown resource plugin kind.")
     };
 
+    public Type? GetResourceType(ResourcePluginKind kind, string pluginId, string? version) => kind switch
+    {
+        ResourcePluginKind.InstrumentDriver => _instrumentDrivers.TryResolve(pluginId, version, out var instrument) ? instrument.Plugin.InstrumentType : null,
+        ResourcePluginKind.Transport => _transports.TryResolve(pluginId, version, out var transport) ? transport.Plugin.TransportType : null,
+        ResourcePluginKind.Service => _services.TryResolve(pluginId, version, out var service) ? service.Plugin.ServiceType : null,
+        _ => null
+    };
+
     private static bool Describe(
         bool resolved,
         PluginVersionMatch sourceMatch,

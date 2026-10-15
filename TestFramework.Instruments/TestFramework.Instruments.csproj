@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>TestFramework.Instruments</PackageId>
+    <Description>Standard instrument classes for TestFramework resource plugins: power supply, electronic load, multimeter, data acquisition, function generator, oscilloscope and CAN channel.</Description>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TestFramework.Abstractions\TestFramework.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

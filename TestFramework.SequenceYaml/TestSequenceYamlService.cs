@@ -224,6 +224,10 @@ public sealed class TestSequenceYamlService
 
         public ResourcePluginKind Kind { get; set; } = ResourcePluginKind.InstrumentDriver;
 
+        // Omitted when absent, so a sequence that names no class saves exactly as it did before.
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
+        public string? Class { get; set; }
+
         public string? DriverId { get; set; }
 
         public string? MinimumDriverVersion { get; set; }
@@ -236,6 +240,7 @@ public sealed class TestSequenceYamlService
             {
                 Alias = Alias,
                 Kind = Kind,
+                Class = string.IsNullOrWhiteSpace(Class) ? null : Class,
                 DriverId = DriverId,
                 MinimumDriverVersion = MinimumDriverVersion,
                 Description = Description
@@ -248,6 +253,7 @@ public sealed class TestSequenceYamlService
             {
                 Alias = requirement.Alias,
                 Kind = requirement.Kind,
+                Class = string.IsNullOrWhiteSpace(requirement.Class) ? null : requirement.Class,
                 DriverId = requirement.DriverId,
                 MinimumDriverVersion = requirement.MinimumDriverVersion,
                 Description = requirement.Description

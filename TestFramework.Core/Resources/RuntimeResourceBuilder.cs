@@ -59,7 +59,9 @@ public sealed class RuntimeResourceBuilder
             using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             resources.RegisterInstrument(
                 definition.Id,
-                await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
+                ResourceTypeCheck.Created(
+                    await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false),
+                    plugin.InstrumentType, definition.DriverId, definition.Id));
         }
 
         foreach (var definition in sequence.Transports)
@@ -68,7 +70,9 @@ public sealed class RuntimeResourceBuilder
             using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             resources.RegisterTransport(
                 definition.Id,
-                await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
+                ResourceTypeCheck.Created(
+                    await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false),
+                    plugin.TransportType, definition.TransportId, definition.Id));
         }
 
         foreach (var definition in sequence.Services)
@@ -77,7 +81,9 @@ public sealed class RuntimeResourceBuilder
             using var turn = await ResourceCreationGate.EnterAsync(plugin, cancellationToken).ConfigureAwait(false);
             resources.RegisterService(
                 definition.Id,
-                await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false));
+                ResourceTypeCheck.Created(
+                    await plugin.CreateAsync(definition, resources.Scope, cancellationToken).ConfigureAwait(false),
+                    plugin.ServiceType, definition.ServiceId, definition.Id));
         }
     }
 }

@@ -33,4 +33,12 @@ public interface IResourcePluginCatalog
     /// mismatch is distinguishable from a plugin that was never installed.
     /// </summary>
     string DescribeMissing(ResourcePluginKind kind, string pluginId, string? version);
+
+    /// <summary>
+    /// The type the plugin a reference resolves to declares it creates - its <c>InstrumentType</c>,
+    /// <c>TransportType</c> or <c>ServiceType</c> - so the validator can check a requirement's
+    /// <see cref="Models.ResourceRequirement.Class"/> against it. Null when the reference does not
+    /// resolve, or for a catalog that cannot say. Added in contract 1.2.
+    /// </summary>
+    Type? GetResourceType(ResourcePluginKind kind, string pluginId, string? version) => null;
 }

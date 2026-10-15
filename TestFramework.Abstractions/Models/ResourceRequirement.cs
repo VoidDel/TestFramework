@@ -25,6 +25,15 @@ public sealed class ResourceRequirement
     public ResourcePluginKind Kind { get; set; } = ResourcePluginKind.InstrumentDriver;
 
     /// <summary>
+    /// What the resource must be - <c>PowerSupply</c>, <c>CanChannel</c> - as a
+    /// <see cref="ResourceClassAttribute"/> names it. Null means the sequence does not say, and only
+    /// the step that uses it finds out. With a class, the validator checks the driver the station
+    /// binds and the station checks the resource it opened, so a multimeter bound where a supply was
+    /// meant is refused before the run rather than at the first cast inside it.
+    /// </summary>
+    public string? Class { get; set; }
+
+    /// <summary>
     /// The driver the sequence insists on, when it needs a particular one. Null means any driver of
     /// the right kind will do, which is the usual case and the one that lets a station swap a
     /// vendor without touching the test.

@@ -773,12 +773,49 @@ public sealed class TestSequenceValidator
             var binding = _station.Find(requirement.Alias);
             if (binding is null || string.IsNullOrWhiteSpace(binding.DriverId) || binding.Kind != requirement.Kind)
             {
+                // A requirement the station leaves to the line is checked against the line's driver.
+                if (binding is null && _line?.Find(requirement.Alias) is { } shared && shared.Kind == requirement.Kind)
+                {
+                    ValidateResourceClass(requirement, shared, PathOf(requirement, paths), issues);
+                }
+
                 continue;
             }
 
-            var path = paths.TryGetValue(requirement.Alias, out var found) ? $"{found}.alias" : "requires";
+            var path = PathOf(requirement, paths);
             ValidateResourcePlugin(binding.Kind, binding.DriverId, binding.DriverVersion, path, issues);
+            ValidateResourceClass(requirement, binding, path, issues);
         }
+    }
+
+    private static string PathOf(ResourceRequirement requirement, IReadOnlyDictionary<string, string> paths) =>
+        paths.TryGetValue(requirement.Alias, out var found) ? $"{found}.alias" : "requires";
+
+    /// <summary>
+    /// That the driver bound to a requirement creates the class the sequence asks for. A driver
+    /// that is not installed is reported by <see cref="ValidateResourcePlugin"/>; this only speaks
+    /// about one whose declared type it can see.
+    /// </summary>
+    private void ValidateResourceClass(
+        ResourceRequirement requirement,
+        StationResourceBinding binding,
+        string path,
+        ICollection<ValidationIssue> issues)
+    {
+        if (string.IsNullOrWhiteSpace(requirement.Class) ||
+            _resourcePlugins?.GetResourceType(binding.Kind, binding.DriverId, binding.DriverVersion) is not { } type ||
+            ResourceClasses.Implements(type, requirement.Class))
+        {
+            return;
+        }
+
+        var classes = ResourceClasses.Of(type);
+        issues.Add(new ValidationIssue
+        {
+            Path = path,
+            Message = $"Resource '{requirement.Alias}' must be a {requirement.Class.Trim()}, but the station binds it to driver '{binding.DriverId}', " +
+                      $"which creates '{type.Name}'" + (classes.Count == 0 ? ", of no resource class." : $" ({string.Join(", ", classes)}).")
+        });
     }
 
     private void ValidateInstruments(

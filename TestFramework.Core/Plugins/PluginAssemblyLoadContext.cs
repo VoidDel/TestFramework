@@ -9,13 +9,18 @@ internal sealed class PluginAssemblyLoadContext : AssemblyLoadContext
     private static readonly HashSet<string> SharedAssemblyNames = new(StringComparer.OrdinalIgnoreCase)
     {
         typeof(ITestStepPlugin).Assembly.GetName().Name!,
-        "TestFramework.Plugin.Abstractions.UI"
+        "TestFramework.Plugin.Abstractions.UI",
+        "TestFramework.Instruments"
     };
 
     /// <summary>
     /// True for an assembly the host provides and every plugin must share rather than carry.
     ///
-    /// The two contract assemblies are the obvious case. Avalonia is the less obvious one: the UI
+    /// The contract assemblies are the obvious case. <c>TestFramework.Instruments</c> is one of them
+    /// for the same reason: a driver in one folder returns an <c>IPowerSupply</c> that a step in
+    /// another folder casts to, and that works only if both folders see one copy of the interface -
+    /// shared dependencies are otherwise loaded once per file path, so two plugin folders each
+    /// carrying the assembly would hold two different <c>IPowerSupply</c> types. Avalonia is the less obvious one: the UI
     /// contract's <c>CreateEditor</c> returns an Avalonia <c>Control</c>, so an editor plugin that
     /// resolved Avalonia privately would implement the interface with a <c>Control</c> of a
     /// different identity - and the runtime then reports that the type "does not have an

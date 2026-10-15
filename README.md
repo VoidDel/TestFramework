@@ -195,8 +195,8 @@ ${faults} & 0x04 != 0
 | 电容 | `F` `mF` `uF` `nF` `pF` |
 | 比例 | `%` `ppm` |
 
-- 单位符号**先按大小写精确匹配**：`mOhm` 与 `MOhm` 相差十亿倍，不能互认。精确匹配不到时，仅当不区分大小写只有唯一候选才采用（`ohm` 即 `Ohm`）；`mohm` 两边都像，视为不认识。裸 `C` 一直是摄氏度，库仑不在表里。
-- 宿主或驱动可以登记新单位：`MeasurementUnits.Register("Nm", "torque", scaleToBase: 1)`，`mNm` 则 `scaleToBase: 0.001`；温度这类带偏移的单位用 `offsetToBase`。重复登记同一定义是空操作，改定义则抛异常——两个插件不能各自改写 `mV` 的含义。
+- 单位符号**先按大小写精确匹配**：`mOhm` 与 `MOhm` 相差十亿倍，不能互认。精确匹配不到时，只在大小写不携带含义的地方才不区分大小写（`ohm` 即 `Ohm`，`khz` 即 `kHz`，`OHM` 即 `Ohm`），以下情况一律视为不认识：两边都像（`mohm` 可能是 `mOhm` 也可能是 `MOhm`）；开头的毫 `m` 与兆 `M` 互换（`MW` 是兆瓦，不论表里有没有，都不能当成表里的毫瓦 `mW`）；单个字母（`S` 是西门子不是秒，`H` 是亨利不是小时）。裸 `C` 一直是摄氏度，库仑不在表里。
+- 新单位由**插件在描述符里声明**（契约 1.2）：`Units = [new("Nm", "torque", 1), new("mNm", "torque", 0.001)]`，步骤插件与资源插件都可以。注册表在注册插件时把它们加入单位表——也就是加载时、校验任何序列之前，所以校验器认得它们。温度这类带偏移的单位用 `OffsetToBase`。重复声明同一定义是空操作，与已有定义冲突的插件整个被拒绝并记为加载失败——两个插件不能各自改写 `mV` 的含义。宿主自己的单位在启动时用 `MeasurementUnits.Register` 登记；驱动不要在构造函数里登记，那时序列早已校验完。
 - 校验器对不认识的单位给**警告**（运行时该判定会是 `Inconclusive`），对 `sourceUnit` 与 `unit` 量纲不同（`mV` 对 `ms`）报**错误**。
 
 ### 比较方式
@@ -408,6 +408,6 @@ var station = new StationResourceHost(stationConfig, resourcePlugins,
 - 插件程序集用 `[assembly: TestFrameworkPlugin("1.0")]` 声明所需的**最低框架契约版本**。宿主在实例化任何类型之前读取该声明，版本高于宿主能提供的直接拒绝整个程序集并给出明确原因，插件代码一行都不会执行。未声明的按基线 1.0 处理。
 - 契约版本与包版本无关：包按自己的节奏发布，契约版本只在插件所面对的接口变化时才动。
 - 框架承诺**高版本兼容低版本插件**：已有插件接口新增成员必须带默认实现，已有成员签名与语义永不改变；做不到的变更即为新的主契约版本。
-- 当前契约为 **1.1**（框架 0.5.0 起）。1.1 新增：`ITestStepPlugin.IsThreadSafe`（默认 `false`）、`StepParameterKind.Expression`、`TestStepExecutionContext.Operator`。只用到 1.0 成员的插件无需改动；用到 1.1 成员的插件声明 `[assembly: TestFrameworkPlugin("1.1")]`，这样旧宿主会在加载时明确拒绝它，而不是运行到一半才缺成员。
+- 当前契约为 **1.2**（框架 0.6.0 起）。1.1 新增：`ITestStepPlugin.IsThreadSafe`（默认 `false`）、`StepParameterKind.Expression`、`TestStepExecutionContext.Operator`（框架 0.5.0 起）。1.2 新增：描述符的 `Units` 与 `MeasurementUnit` / `MeasurementUnits`。只用到 1.0 成员的插件无需改动；用到新成员的插件声明它需要的版本，如 `[assembly: TestFrameworkPlugin("1.2")]`，这样旧宿主会在加载时明确拒绝它，而不是运行到一半才缺成员。
 
 插件开发详见 [docs/plugin-development.md](docs/plugin-development.md)，更多架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。

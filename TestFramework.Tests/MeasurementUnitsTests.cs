@@ -1,8 +1,10 @@
 using TestFramework.Abstractions.Execution;
 using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
+using TestFramework.Abstractions.Resources;
 using TestFramework.Core.Execution;
 using TestFramework.Core.Plugins;
+using TestFramework.Core.Resources;
 using TestFramework.SequenceYaml.Validation;
 using Xunit;
 
@@ -66,6 +68,88 @@ public sealed class MeasurementUnitsTests
         Assert.Null(MeasurementUnits.DimensionOf("mohm"));
     }
 
+    [Theory]
+    [InlineData("OHM", "Ohm")]   // the M of OHM is not a prefix
+    [InlineData("khz", "kHz")]
+    [InlineData("KWH", "kWh")]
+    [InlineData("mw", "mW")]
+    [InlineData("MHZ", "MHz")]
+    public void Symbols_FoldCaseWhereCaseCarriesNoMeaning(string written, string expected)
+    {
+        Assert.Equal(expected, MeasurementUnits.Normalize(written));
+    }
+
+    [Theory]
+    [InlineData("MW")]   // a megawatt, not the milliwatt the table has
+    [InlineData("MV")]
+    [InlineData("MAH")]
+    [InlineData("mhz")]  // a millihertz, not MHz
+    [InlineData("MS")]   // megasiemens, not ms
+    [InlineData("S")]    // siemens, not seconds
+    [InlineData("H")]    // henry, not hours
+    public void Symbols_DoNotFoldCaseWhereItWouldChangeTheUnit(string written)
+    {
+        Assert.False(MeasurementUnits.IsKnown(written));
+        Assert.False(MeasurementUnits.TryConvert(1.0, written, "W", out _));
+    }
+
+    [Fact]
+    public void Register_TakesSeveralUnitsAllOrNone()
+    {
+        var refused = Assert.Throws<InvalidOperationException>(() => MeasurementUnits.Register(
+        [
+            new MeasurementUnit("kgf", "force-test", 9.80665),
+            new MeasurementUnit("mV", "voltage", 1.0)
+        ]));
+
+        Assert.Contains("mV", refused.Message, StringComparison.Ordinal);
+        Assert.False(MeasurementUnits.IsKnown("kgf"));
+    }
+
+    [Fact]
+    public void PluginRegistry_AddsTheUnitsAStepPluginDeclares_BeforeAnySequenceIsChecked()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new OutputPlugin("101.3 kPa", [new("Pa", "pressure", 1.0), new("kPa", "pressure", 1000.0)]));
+
+        Assert.Equal("pressure", MeasurementUnits.DimensionOf("kPa"));
+        Assert.Empty(new TestSequenceValidator(registry).Validate(SequenceJudging(sourceUnit: null, unit: "Pa", 100_000, 102_000)));
+    }
+
+    [Fact]
+    public async Task PluginRegistry_UnitsAPluginDeclares_AreJudgedInTheRun()
+    {
+        var registry = new PluginRegistry();
+        registry.Register(new OutputPlugin("1.2 kNm", [new("Nm", "torque", 1.0), new("kNm", "torque", 1000.0)]));
+
+        var result = await new TestSequenceRunner(registry).RunAsync(SequenceJudging(sourceUnit: null, unit: "Nm", 1000, 1500));
+
+        var measurement = Assert.Single(Assert.Single(result.ItemResults).Measurements);
+        Assert.Equal(TestVerdict.Pass, result.Verdict);
+        Assert.Equal(1200.0, measurement.Value!.Value, precision: 9);
+    }
+
+    [Fact]
+    public void PluginRegistry_RefusesAPluginWhoseUnitsContradictTheTable()
+    {
+        var registry = new PluginRegistry();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            registry.Register(new OutputPlugin("1", [new("lbf-test", "force-test", 4.448), new("mA", "current", 1.0)])));
+
+        Assert.False(registry.TryGet("probe.output", out _));
+        Assert.False(MeasurementUnits.IsKnown("lbf-test"));
+    }
+
+    [Fact]
+    public void ResourcePluginRegistry_AddsTheUnitsADriverDeclares()
+    {
+        new ResourcePluginRegistry().RegisterInstrumentDriver(new UnitDriver([new("bar", "pressure", 100_000.0)]));
+
+        Assert.True(MeasurementUnits.TryConvert(1.013, "bar", "kPa", out var converted));
+        Assert.Equal(101.3, converted, precision: 9);
+    }
+
     [Fact]
     public void Register_AddsAUnitEverySequenceMayThenUse()
     {
@@ -102,6 +186,7 @@ public sealed class MeasurementUnitsTests
         Assert.Equal("items[0].verdictSource.unit", issue.Path);
         Assert.Equal(ValidationSeverity.Warning, issue.Severity);
         Assert.Contains("furlong", issue.Message, StringComparison.Ordinal);
+        Assert.Contains("descriptor's Units", issue.Message, StringComparison.Ordinal);
         Assert.Contains("MeasurementUnits.Register", issue.Message, StringComparison.Ordinal);
     }
 
@@ -173,13 +258,14 @@ public sealed class MeasurementUnitsTests
         };
     }
 
-    private sealed class OutputPlugin(object? value) : ITestStepPlugin
+    private sealed class OutputPlugin(object? value, IReadOnlyList<MeasurementUnit>? units = null) : ITestStepPlugin
     {
         public TestStepPluginDescriptor Descriptor { get; } = new()
         {
             PluginId = "probe.output",
             DisplayName = "probe.output",
-            Version = new Version(1, 0, 0)
+            Version = new Version(1, 0, 0),
+            Units = units ?? []
         };
 
         public Type SettingsType => typeof(object);
@@ -192,5 +278,21 @@ public sealed class MeasurementUnitsTests
 
         public Task<TestStepResult> ExecuteAsync(TestStepExecutionContext context, object settings, CancellationToken cancellationToken) =>
             Task.FromResult(new TestStepResult { Verdict = TestVerdict.Pass, Outputs = { ["value"] = value } });
+    }
+
+    private sealed class UnitDriver(IReadOnlyList<MeasurementUnit> units) : IInstrumentDriverPlugin
+    {
+        public ResourcePluginDescriptor Descriptor { get; } = new()
+        {
+            PluginId = "probe.gauge",
+            DisplayName = "probe.gauge",
+            Version = new Version(1, 0, 0),
+            Units = units
+        };
+
+        public Type InstrumentType => typeof(object);
+
+        public Task<object> CreateAsync(InstrumentDefinition definition, IResourceScope resources, CancellationToken cancellationToken) =>
+            Task.FromResult(new object());
     }
 }

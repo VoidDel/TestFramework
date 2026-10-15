@@ -509,7 +509,7 @@ public sealed class TestSequenceValidator
                 Path = $"{path}.{field}",
                 Severity = ValidationSeverity.Warning,
                 Message = $"Unit '{unit.Trim()}' is not one this framework knows, so a value converted to or from it will be judged Inconclusive. " +
-                          "A host or driver can register it with MeasurementUnits.Register."
+                          "A plugin that reports in it declares it in its descriptor's Units; a host can register it with MeasurementUnits.Register at start-up."
             });
         }
 

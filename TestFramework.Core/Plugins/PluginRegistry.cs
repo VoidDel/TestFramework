@@ -1,3 +1,4 @@
+using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 
 namespace TestFramework.Core.Plugins;
@@ -15,7 +16,18 @@ public sealed class PluginRegistry : IPluginRegistry
         .ThenByDescending(plugin => plugin.Descriptor.Version)
         .ToArray();
 
-    public void Register(ITestStepPlugin plugin) => _index.Register(plugin);
+    /// <summary>
+    /// Registers the plugin and the units its descriptor declares. The units go first, all or none,
+    /// so a plugin that contradicts a unit already defined is refused whole rather than registered
+    /// with outputs the table reads differently from how it meant them. The table only grows: units
+    /// of a plugin refused afterwards, as a duplicate, stay - they agreed with the table to get there.
+    /// </summary>
+    public void Register(ITestStepPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+        MeasurementUnits.Register(plugin.Descriptor?.Units ?? []);
+        _index.Register(plugin);
+    }
 
     public ITestStepPlugin GetRequired(string pluginId, string? version = null) => _index.GetRequired(pluginId, version);
 

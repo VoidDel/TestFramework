@@ -136,6 +136,10 @@ default of `false`, `StepParameterKind.Expression`, and `TestStepExecutionContex
 plugin runs unchanged. A plugin that uses any of them declares 1.1, so a 1.0 host refuses it at load
 with a reason instead of failing on a missing member mid-run.
 
+Contract **1.2** (framework 0.6.0) added `Units` to both plugin descriptors, with the
+`MeasurementUnit` and `MeasurementUnits` types they use. A plugin that declares units, or calls
+the table, declares 1.2.
+
 ## Plugin Lifecycle and Trust Boundary
 
 Plugins are discovered by scanning the plugin directory for managed assemblies. Each assembly is
@@ -247,13 +251,22 @@ normalise to `u`, and `℃` (U+2103) to `°C`, since instruments and operators p
 
 The table is `MeasurementUnits` in Abstractions, shared with the validator - which warns about a
 unit nobody knows and rejects a `sourceUnit` and `unit` of different dimensions - and open to
-registration: a driver whose instrument reports in `Ah` registers the unit once, usually in its
-constructor, instead of converting before it returns. A definition is a dimension, a scale and an
-offset to the dimension's base (Kelvin is Celsius offset by -273.15), so conversion only ever
-happens within a dimension. Registering a symbol the table has is a no-op for the same definition
-and an error for a different one, because two plugins must not be able to disagree about `mV`.
+additions. A plugin whose instrument reports in a unit the table lacks declares it in its
+descriptor's `Units`, instead of converting before it returns, and the registry adds it as it
+registers the plugin: at load, before any sequence is validated. Registering from a driver's
+constructor would be too late - resources are created after validation, so the validator would
+warn about a unit the run then knows. A host registers its own units at start-up. A definition is
+a dimension, a scale and an offset to the dimension's base (Kelvin is Celsius offset by -273.15),
+so conversion only ever happens within a dimension. Registering a symbol the table has is a no-op
+for the same definition and an error for a different one, because two plugins must not be able to
+disagree about `mV`; a plugin whose declaration contradicts the table is refused whole, and the
+loader reports it.
+
 Symbols match case-sensitively first - `mOhm` and `MOhm` are both real - and case-insensitively
-only when that is unambiguous, so `ohm` is `Ohm` and `mohm` is nothing.
+only where case carries no meaning, so `ohm`, `OHM` and `khz` read as `Ohm`, `Ohm` and `kHz`. It
+does not fold when two units differ only in case (`mohm`), when a leading milli `m` would become a
+mega `M` or back (`MW` is a megawatt, never the table's `mW`), or for a single letter (`S` is
+siemens, not seconds).
 
 #### Comparisons
 

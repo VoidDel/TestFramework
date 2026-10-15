@@ -319,7 +319,7 @@ public sealed class FlowControlTests
         Assert.Equal("sha256:abc", result.RunInfo.SequenceHash);
         Assert.Equal("WO-17", result.RunInfo.Properties["workOrder"]);
         Assert.Equal("B04", result.SequenceVersion);
-        Assert.Equal("1.1", result.FrameworkContractVersion);
+        Assert.Equal("1.2", result.FrameworkContractVersion);
         Assert.False(string.IsNullOrWhiteSpace(result.FrameworkVersion));
         var step = result.ItemResults[0].MainResults[0];
         Assert.Equal("1.0.0", step.RequestedPluginVersion);

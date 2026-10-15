@@ -1,3 +1,4 @@
+using TestFramework.Abstractions.Models;
 using TestFramework.Abstractions.Plugins;
 using TestFramework.Abstractions.Resources;
 using TestFramework.Core.Plugins;
@@ -21,11 +22,22 @@ public sealed class ResourcePluginRegistry : IResourcePluginCatalog
 
     public IReadOnlyCollection<ITestServicePlugin> Services => Sort(_services.Plugins, plugin => plugin.Descriptor);
 
-    public void RegisterInstrumentDriver(IInstrumentDriverPlugin plugin) => _instrumentDrivers.Register(plugin);
+    // Each plugin's declared units join the unit table before the plugin joins its index, so one
+    // that contradicts a unit already defined is refused whole - see PluginRegistry.Register.
+    public void RegisterInstrumentDriver(IInstrumentDriverPlugin plugin) =>
+        Register(plugin, plugin?.Descriptor, _instrumentDrivers);
 
-    public void RegisterTransport(ITransportPlugin plugin) => _transports.Register(plugin);
+    public void RegisterTransport(ITransportPlugin plugin) => Register(plugin, plugin?.Descriptor, _transports);
 
-    public void RegisterService(ITestServicePlugin plugin) => _services.Register(plugin);
+    public void RegisterService(ITestServicePlugin plugin) => Register(plugin, plugin?.Descriptor, _services);
+
+    private static void Register<TPlugin>(TPlugin plugin, ResourcePluginDescriptor? descriptor, VersionedPluginIndex<TPlugin> index)
+        where TPlugin : class
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+        MeasurementUnits.Register(descriptor?.Units ?? []);
+        index.Register(plugin);
+    }
 
     public bool TryResolve(
         ResourcePluginKind kind,

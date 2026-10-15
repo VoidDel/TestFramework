@@ -15,4 +15,11 @@ public sealed class ResourcePluginDescriptor
     public string? Category { get; init; }
 
     public string? Description { get; init; }
+
+    /// <summary>
+    /// Units the instruments this plugin drives report in that the framework does not know - see
+    /// <see cref="Plugins.TestStepPluginDescriptor.Units"/>. They join the table when the plugin is
+    /// registered, not when a resource is created, which is after the sequence was validated.
+    /// </summary>
+    public IReadOnlyList<Models.MeasurementUnit> Units { get; init; } = [];
 }

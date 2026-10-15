@@ -11,22 +11,29 @@ namespace TestFramework.Abstractions.Models;
 /// validator, the runner and an editor share (<see cref="NumericComparisonRules"/>) and takes
 /// registrations, so all three agree on what a unit means.
 ///
-/// A unit is a symbol, a dimension and how to reach the dimension's base: <c>mV</c> is voltage,
-/// scaled by 0.001; <c>K</c> is temperature, offset by -273.15 from the Celsius base. Conversion
-/// is allowed only within one dimension; across dimensions, or to or from a symbol not in the
-/// table, it refuses, and the judgment is <c>Inconclusive</c> rather than a comparison in the
-/// wrong scale.
+/// A unit is a <see cref="MeasurementUnit"/>: a symbol, a dimension and how to reach the
+/// dimension's base. Conversion is allowed only within one dimension; across dimensions, or to or
+/// from a symbol not in the table, it refuses, and the judgment is <c>Inconclusive</c> rather than
+/// a comparison in the wrong scale.
+///
+/// Units join the table before any sequence is checked against them: a plugin declares its units
+/// in its descriptor and the registry adds them as it registers the plugin, during load; a host
+/// registers its own at start-up. A driver registering from its constructor would be too late -
+/// resources are created after the sequence was validated, so the validator would have warned
+/// about a unit the run then knows.
 ///
 /// Symbols match case-sensitively first, because <c>mOhm</c> and <c>MOhm</c> are both real and a
-/// thousand million apart. A symbol that matches nothing exactly matches case-insensitively when
-/// that is unambiguous - <c>ohm</c> is <c>Ohm</c>, <c>hz</c> is <c>Hz</c> - so a hand-typed unit
-/// still works, while <c>mohm</c> matches nothing rather than guessing.
+/// thousand million apart. A symbol that matches nothing exactly matches case-insensitively only
+/// where case cannot carry meaning - <c>ohm</c> is <c>Ohm</c>, <c>khz</c> is <c>kHz</c> - so a
+/// hand-typed unit still works. It does not when two units differ only in case (<c>mohm</c>), when
+/// a leading m of milli would become the M of mega or back (<c>MW</c> is not <c>mW</c>, registered
+/// or not), or for a single letter (<c>S</c> is siemens, not seconds; <c>H</c> is henry, not hours).
 /// </summary>
 public static class MeasurementUnits
 {
     private static readonly object Gate = new();
 
-    private static volatile Dictionary<string, UnitDefinition> _units = BuiltIn();
+    private static volatile Dictionary<string, MeasurementUnit> _units = BuiltIn();
 
     /// <summary>The symbols the table knows, as registered.</summary>
     public static IReadOnlyCollection<string> Known => _units.Keys.ToArray();
@@ -78,53 +85,74 @@ public static class MeasurementUnits
     }
 
     /// <summary>
-    /// Adds a unit for the rest of the process: a driver that returns <c>"52.3 Ah"</c> registers
-    /// <c>Ah</c> once, usually in its constructor, and every sequence may then write limits in it.
-    ///
-    /// <paramref name="scaleToBase"/> and <paramref name="offsetToBase"/> say how a value in this
-    /// unit becomes one in the dimension's base: <c>base = value * scale + offset</c>. A dimension
-    /// not yet in the table is created by its first unit, whose scale should then be 1.
+    /// Adds a unit for the rest of the process. A host calls it at start-up; a plugin declares its
+    /// units in its descriptor instead, and the registry adds them as it registers the plugin.
+    /// </summary>
+    public static void Register(string symbol, string dimension, double scaleToBase, double offsetToBase = 0) =>
+        Register([new MeasurementUnit(symbol, dimension, scaleToBase, offsetToBase)]);
+
+    /// <summary>
+    /// Adds several units at once, all or none: a plugin whose second unit contradicts the table
+    /// must not leave its first one behind.
     ///
     /// Registering a symbol the table already has is a no-op when the definition is the same and
     /// an error when it is not: two plugins must not be able to change what every sequence means
     /// by <c>mV</c>. The built-in symbols are protected the same way.
     /// </summary>
-    public static void Register(string symbol, string dimension, double scaleToBase, double offsetToBase = 0)
+    public static void Register(IEnumerable<MeasurementUnit> units)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
-        ArgumentException.ThrowIfNullOrWhiteSpace(dimension);
-        if (!double.IsFinite(scaleToBase) || scaleToBase <= 0)
+        ArgumentNullException.ThrowIfNull(units);
+        var definitions = units.Select(Checked).ToList();
+        if (definitions.Count == 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(scaleToBase), "A unit's scale must be a positive, finite number.");
+            return;
         }
 
-        if (!double.IsFinite(offsetToBase))
-        {
-            throw new ArgumentOutOfRangeException(nameof(offsetToBase), "A unit's offset must be finite.");
-        }
-
-        var definition = new UnitDefinition(Spell(symbol), dimension.Trim(), scaleToBase, offsetToBase);
         lock (Gate)
         {
-            if (_units.TryGetValue(definition.Symbol, out var existing))
+            // Copy on write: readers hold the previous dictionary and never see a partial table.
+            var table = new Dictionary<string, MeasurementUnit>(_units, StringComparer.Ordinal);
+            foreach (var definition in definitions)
             {
-                if (existing == definition)
+                if (table.TryGetValue(definition.Symbol, out var existing))
                 {
-                    return;
+                    if (existing == definition)
+                    {
+                        continue;
+                    }
+
+                    throw new InvalidOperationException(
+                        $"Unit '{definition.Symbol}' is already defined as {existing.Dimension} (scale {existing.ScaleToBase}, offset {existing.OffsetToBase}) " +
+                        $"and cannot be redefined as {definition.Dimension} (scale {definition.ScaleToBase}, offset {definition.OffsetToBase}).");
                 }
 
-                throw new InvalidOperationException(
-                    $"Unit '{definition.Symbol}' is already defined as {existing.Dimension} (scale {existing.ScaleToBase}, offset {existing.OffsetToBase}) " +
-                    $"and cannot be redefined as {definition.Dimension} (scale {definition.ScaleToBase}, offset {definition.OffsetToBase}).");
+                table[definition.Symbol] = definition;
             }
 
-            // Copy on write: readers hold the previous dictionary and never see a partial table.
-            var units = new Dictionary<string, UnitDefinition>(_units, StringComparer.Ordinal) { [definition.Symbol] = definition };
-            _units = units;
+            _units = table;
         }
     }
 
-    private static bool TryFind(string? unit, out UnitDefinition definition)
+    /// <summary>The unit as the table stores it - symbol spelled, dimension trimmed - or why it cannot be one.</summary>
+    private static MeasurementUnit Checked(MeasurementUnit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(unit.Symbol, nameof(MeasurementUnit.Symbol));
+        ArgumentException.ThrowIfNullOrWhiteSpace(unit.Dimension, nameof(MeasurementUnit.Dimension));
+        if (!double.IsFinite(unit.ScaleToBase) || unit.ScaleToBase <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MeasurementUnit.ScaleToBase), $"Unit '{unit.Symbol}': a unit's scale must be a positive, finite number.");
+        }
+
+        if (!double.IsFinite(unit.OffsetToBase))
+        {
+            throw new ArgumentOutOfRangeException(nameof(MeasurementUnit.OffsetToBase), $"Unit '{unit.Symbol}': a unit's offset must be finite.");
+        }
+
+        return unit with { Symbol = Spell(unit.Symbol), Dimension = unit.Dimension.Trim() };
+    }
+
+    private static bool TryFind(string? unit, out MeasurementUnit definition)
     {
         var symbol = Spell(unit);
         var units = _units;
@@ -133,9 +161,15 @@ public static class MeasurementUnits
             return true;
         }
 
-        // Case-insensitive only when it cannot be two different units; a reader who typed "mohm"
-        // may mean either, and a silent choice would be a comparison in the wrong scale.
-        UnitDefinition? match = null;
+        // Case-insensitive only where case cannot carry meaning; anywhere else a silent choice
+        // would be a comparison in the wrong scale. A single letter is all case: S is not s.
+        definition = default!;
+        if (symbol.Length < 2)
+        {
+            return false;
+        }
+
+        MeasurementUnit? match = null;
         foreach (var candidate in units.Values)
         {
             if (!string.Equals(candidate.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
@@ -143,18 +177,32 @@ public static class MeasurementUnits
                 continue;
             }
 
+            // Two units that differ only in case: "mohm" may be either mOhm or MOhm.
             if (match is not null)
             {
-                definition = default!;
                 return false;
             }
 
             match = candidate;
         }
 
-        definition = match!;
-        return match is not null;
+        if (match is null || ChangesMilliOrMega(symbol, match.Symbol))
+        {
+            return false;
+        }
+
+        definition = match;
+        return true;
     }
+
+    /// <summary>
+    /// True when reading <paramref name="written"/> as <paramref name="symbol"/> turns a leading m
+    /// into an M or back: <c>MW</c> is a megawatt whether or not the table has it, and reading it as
+    /// the milliwatt the table does have would be off by a thousand million. Only the first letter
+    /// is a prefix; the M of an all-capitals <c>OHM</c> is not, and still reads as <c>Ohm</c>.
+    /// </summary>
+    private static bool ChangesMilliOrMega(string written, string symbol) =>
+        written[0] is 'm' or 'M' && written[0] != symbol[0];
 
     /// <summary>
     /// The symbol as the table spells it before lookup. Instruments and keyboards produce several
@@ -169,11 +217,11 @@ public static class MeasurementUnits
             .Replace("℃", "°C", StringComparison.Ordinal)
         ?? string.Empty;
 
-    private static Dictionary<string, UnitDefinition> BuiltIn()
+    private static Dictionary<string, MeasurementUnit> BuiltIn()
     {
-        var units = new Dictionary<string, UnitDefinition>(StringComparer.Ordinal);
+        var units = new Dictionary<string, MeasurementUnit>(StringComparer.Ordinal);
         void Add(string symbol, string dimension, double scale, double offset = 0) =>
-            units[symbol] = new UnitDefinition(symbol, dimension, scale, offset);
+            units[symbol] = new MeasurementUnit(symbol, dimension, scale, offset);
 
         Add("", "", 1.0);
 
@@ -235,6 +283,4 @@ public static class MeasurementUnits
 
         return units;
     }
-
-    private sealed record UnitDefinition(string Symbol, string Dimension, double ScaleToBase, double OffsetToBase);
 }

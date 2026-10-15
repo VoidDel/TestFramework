@@ -62,7 +62,7 @@ using TestFramework.Abstractions.Plugins;
 [assembly: TestFrameworkPlugin("1.0")]
 ```
 
-只用到 1.0 成员的插件声明 1.0，能被任何 0.x 宿主加载；用到 `IsThreadSafe`、`StepParameterKind.Expression` 或 `context.Operator` 的插件声明 `"1.1"`（框架 0.5.0 起提供）。
+只用到 1.0 成员的插件声明 1.0，能被任何 0.x 宿主加载；用到 `IsThreadSafe`、`StepParameterKind.Expression` 或 `context.Operator` 的插件声明 `"1.1"`（框架 0.5.0 起提供）；在描述符里声明 `Units`、或用到 `MeasurementUnit` / `MeasurementUnits` 的插件声明 `"1.2"`（框架 0.6.0 起提供）。
 
 宿主在**实例化任何类型之前**读取这个声明。声明高于宿主能提供的版本时，整个程序集被拒绝并记录一条明确的失败信息，插件代码一行都不会执行 —— 而不是等到运行到一半抛 `MissingMethodException`。
 
@@ -149,7 +149,19 @@ public sealed class MyStepPlugin : ITestStepPlugin
 - 参数值带着 YAML 标量类型到达：文件里未加引号的 `5.0` 是 double、`7` 是 int、`true` 是 bool，加引号的是字符串；保存时会给形似数字或布尔的字符串加引号，类型经往返不变。`LoadSettings` 应同时接受数字与字符串两种形式（内置的 `SettingsMap` 即如此），手写文件或文本输入都可能给出字符串。
 - 输出写入 `TestStepResult.Outputs`，序列通过 `verdictSource.outputKey` 取用。
 - 一次读回多路同类测量值（80 串单体电压、32 路温度）时，把它们作为**一个**列表或字典输出，不要拆成 80 个键、更不要让序列写 80 个步骤。数值判定会对每个元素套用同一组限值并逐个记录；字典的键（通常是信号名，如 `Cell01`）会成为记录名，列表则记为 `key[0]`、`key[1]`……。元素可以是数字，也可以是带单位的字符串（`"3301 mV"`）。
-- 带单位的测量值，其单位要是框架认识的（内置表见 README"数值判定的单位"）。仪器用 `Ah`、`Nm` 这类表里没有的单位时，在插件构造函数里登记一次：`MeasurementUnits.Register("Nm", "torque", 1)`。重复登记同一定义没有副作用，改写已有定义会抛异常。
+- 带单位的测量值，其单位要是框架认识的（内置表见 README"数值判定的单位"）。仪器用 `Nm`、`kPa` 这类表里没有的单位时，在描述符里声明（契约 1.2）：
+
+  ```csharp
+  public TestStepPluginDescriptor Descriptor { get; } = new()
+  {
+      PluginId = "acme.torque",
+      DisplayName = "扭矩测量",
+      Version = new Version(1, 0, 0),
+      Units = [new MeasurementUnit("Nm", "torque", 1.0), new MeasurementUnit("mNm", "torque", 0.001)]
+  };
+  ```
+
+  资源插件的 `ResourcePluginDescriptor` 同样有 `Units`。注册表在注册插件时（即加载时、校验序列之前）把它们加入单位表。重复声明同一定义没有副作用；与已有定义冲突的插件整个被拒绝，记为加载失败。**不要**在构造函数或 `CreateAsync` 里调 `MeasurementUnits.Register`：资源是在序列校验之后才创建的，校验器会对一个运行时其实认得的单位报警告。
 - 插件**不要**自己往结果里填 `PluginId` / `PluginVersion`：运行器会写入实际运行的插件与版本。
 - 插件**不必**自己实现重试或轮询：步骤的 `retry`（含 `until` 条件）由运行器负责。插件只需诚实地返回这一次的结果。
 

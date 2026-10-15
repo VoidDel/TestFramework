@@ -19,17 +19,27 @@ namespace TestFramework.Abstractions.Expressions;
 /// or      := and ('||' and)*
 /// and     := not ('&amp;&amp;' not)*
 /// not     := '!' not | compare
-/// compare := sum (('==' | '!=' | '&lt;' | '&lt;=' | '&gt;' | '&gt;=') sum)?
+/// compare := bitor (('==' | '!=' | '&lt;' | '&lt;=' | '&gt;' | '&gt;=') bitor)?
+/// bitor   := bitxor ('|' bitxor)*
+/// bitxor  := bitand ('^' bitand)*
+/// bitand  := shift ('&amp;' shift)*
+/// shift   := sum (('&lt;&lt;' | '&gt;&gt;') sum)*
 /// sum     := product (('+' | '-') product)*
 /// product := unary (('*' | '/' | '%') unary)*
-/// unary   := '-' unary | postfix
+/// unary   := '-' unary | '~' unary | postfix
 /// postfix := primary ('[' or ']')*
-/// primary := number | 'text' | "text" | true | false | null | ${name} | name '(' args ')' | '(' or ')'
+/// primary := number | 0xhex | 'text' | "text" | true | false | null | ${name} | name '(' args ')' | '(' or ')'
 /// </code>
+///
+/// The bitwise operators bind tighter than the comparisons, as in Python rather than C, so
+/// <c>${faults} &amp; 0x04 != 0</c> tests the bit - the reading a status word is written for. They
+/// take whole numbers only; a fraction is an error, not a truncation. A list is indexed by
+/// position, <c>${cells}[0]</c>, and a dictionary - a signal table a step output - by key,
+/// <c>${signals}['SOC']</c>, with the keys compared as the dictionary itself compares them.
 ///
 /// Functions: <c>abs</c>, <c>round(x[, digits])</c>, <c>min</c>, <c>max</c>, <c>sum</c>,
 /// <c>avg</c>, <c>count</c>. The aggregate ones take a list - a variable holding 80 cell voltages -
-/// or several arguments.
+/// a dictionary, whose values they use, or several arguments.
 /// </summary>
 public sealed class SequenceExpression
 {
@@ -79,8 +89,8 @@ public sealed class SequenceExpression
     }
 
     /// <summary>
-    /// The value: a <see cref="double"/>, <see cref="bool"/>, <see cref="string"/>, a list, or null.
-    /// Numbers come back as double whatever type the variables held.
+    /// The value: a <see cref="double"/>, <see cref="bool"/>, <see cref="string"/>, a list, a
+    /// dictionary, or null. Numbers come back as double whatever type the variables held.
     /// </summary>
     public object? Evaluate(IDictionary<string, object?> variables)
     {
@@ -125,23 +135,42 @@ public sealed class SequenceExpression
         string text => text,
         bool flag => flag ? "true" : "false",
         double number => number.ToString("R", CultureInfo.InvariantCulture),
+        IDictionary => "a dictionary",
         IEnumerable => "a list",
         _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
     };
 
-    /// <summary>A variable's value in the expression's own types: numbers as double, lists as lists.</summary>
+    /// <summary>
+    /// A variable's value in the expression's own types: numbers as double, lists as lists, and a
+    /// dictionary as a dictionary that compares keys as the original did - a signal table's
+    /// <c>SOC</c> and <c>soc</c> stay two signals (see <see cref="Models.VariableValue"/>).
+    /// </summary>
     internal static object? FromVariable(object? value)
     {
-        return value switch
+        switch (value)
         {
-            null => null,
-            string or bool or double => value,
-            float or decimal or int or long or short or byte or uint or ulong or ushort or sbyte =>
-                Convert.ToDouble(value, CultureInfo.InvariantCulture),
-            IDictionary dictionary => dictionary.Values.Cast<object?>().Select(FromVariable).ToList(),
-            IEnumerable list => list.Cast<object?>().Select(FromVariable).ToList(),
-            _ => value
-        };
+            case null:
+                return null;
+            case string or bool or double:
+                return value;
+            case float or decimal or int or long or short or byte or uint or ulong or ushort or sbyte:
+                return Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            case IDictionary dictionary:
+                var comparer = dictionary is IDictionary<string, object?> typed
+                    ? Models.VariableValue.ComparerOf(typed)
+                    : StringComparer.Ordinal;
+                var copy = new Dictionary<string, object?>(comparer);
+                foreach (DictionaryEntry entry in dictionary)
+                {
+                    copy[Convert.ToString(entry.Key, CultureInfo.InvariantCulture) ?? string.Empty] = FromVariable(entry.Value);
+                }
+
+                return copy;
+            case IEnumerable list:
+                return list.Cast<object?>().Select(FromVariable).ToList();
+            default:
+                return value;
+        }
     }
 
     private abstract class Node
@@ -172,6 +201,7 @@ public sealed class SequenceExpression
             return op switch
             {
                 "-" => -Operations.Number(value, "-"),
+                "~" => (double)~Operations.Integer(value, "~"),
                 _ => !Operations.Boolean(value, "!")
             };
         }
@@ -202,18 +232,32 @@ public sealed class SequenceExpression
     {
         public override object? Evaluate(IDictionary<string, object?> variables)
         {
-            if (target.Evaluate(variables) is not List<object?> list)
+            var subject = target.Evaluate(variables);
+            var key = index.Evaluate(variables);
+            switch (subject)
             {
-                throw new SequenceExpressionException("Only a list can be indexed.");
-            }
+                case List<object?> list:
+                    var position = Operations.Number(key, "[]");
+                    if (position != Math.Floor(position) || position < 0 || position >= list.Count)
+                    {
+                        throw new SequenceExpressionException($"Index {Describe(position)} is outside a list of {list.Count}.");
+                    }
 
-            var position = Operations.Number(index.Evaluate(variables), "[]");
-            if (position != Math.Floor(position) || position < 0 || position >= list.Count)
-            {
-                throw new SequenceExpressionException($"Index {Describe(position)} is outside a list of {list.Count}.");
-            }
+                    return list[(int)position];
 
-            return list[(int)position];
+                case Dictionary<string, object?> dictionary:
+                    if (key is not string name)
+                    {
+                        throw new SequenceExpressionException($"A dictionary is indexed by a key in quotes, not by '{Describe(key)}'.");
+                    }
+
+                    return dictionary.TryGetValue(name, out var entry)
+                        ? entry
+                        : throw new SequenceExpressionException($"Key '{name}' is not in the dictionary.");
+
+                default:
+                    throw new SequenceExpressionException("Only a list or a dictionary can be indexed.");
+            }
         }
     }
 
@@ -222,6 +266,8 @@ public sealed class SequenceExpression
         public override object? Evaluate(IDictionary<string, object?> variables) =>
             Functions.Invoke(name, arguments.Select(argument => argument.Evaluate(variables)).ToList());
     }
+
+    private const double MaxExactInteger = 9007199254740992; // 2^53
 
     private static class Operations
     {
@@ -233,6 +279,22 @@ public sealed class SequenceExpression
                 string text when double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) => parsed,
                 _ => throw new SequenceExpressionException($"Operator '{op}' needs a number, but got '{Describe(value)}'.")
             };
+        }
+
+        /// <summary>
+        /// A whole number, for the bitwise operators. A fraction is refused rather than truncated:
+        /// a status word with a fraction in it is not a status word, and masking it would answer
+        /// a question nobody asked. Beyond 2^53 a double no longer holds every integer exactly.
+        /// </summary>
+        public static long Integer(object? value, string op)
+        {
+            var number = Number(value, op);
+            if (number != Math.Floor(number) || Math.Abs(number) > MaxExactInteger)
+            {
+                throw new SequenceExpressionException($"Operator '{op}' needs a whole number, but got '{Describe(number)}'.");
+            }
+
+            return (long)number;
         }
 
         public static bool Boolean(object? value, string op)
@@ -260,6 +322,24 @@ public sealed class SequenceExpression
                     return Number(left, op) >= Number(right, op);
                 case "+" when left is string first && right is string second:
                     return first + second;
+                case "&":
+                    return (double)(Integer(left, op) & Integer(right, op));
+                case "|":
+                    return (double)(Integer(left, op) | Integer(right, op));
+                case "^":
+                    return (double)(Integer(left, op) ^ Integer(right, op));
+                case "<<":
+                case ">>":
+                    var shift = Integer(right, op);
+                    if (shift is < 0 or > 63)
+                    {
+                        throw new SequenceExpressionException($"Operator '{op}' shifts by 0 to 63 bits, not {shift}.");
+                    }
+
+                    var shifted = op == "<<" ? Integer(left, op) << (int)shift : Integer(left, op) >> (int)shift;
+                    return Math.Abs(shifted) > MaxExactInteger
+                        ? throw new SequenceExpressionException($"'{Describe(left)} {op} {shift}' is too large to hold exactly.")
+                        : (double)shifted;
             }
 
             var a = Number(left, op);
@@ -360,7 +440,12 @@ public sealed class SequenceExpression
                 throw new SequenceExpressionException($"{name}() needs at least one argument.");
             }
 
-            return arguments.SelectMany(argument => argument is List<object?> list ? list : [argument]).ToList();
+            return arguments.SelectMany(argument => argument switch
+            {
+                List<object?> list => list,
+                Dictionary<string, object?> dictionary => dictionary.Values.ToList(),
+                _ => new List<object?> { argument }
+            }).ToList();
         }
 
         private static void Expect(string name, IReadOnlyList<object?> arguments, int minimum, int maximum)
@@ -431,16 +516,62 @@ public sealed class SequenceExpression
 
         private Node ParseCompare()
         {
-            var node = ParseSum();
+            var node = ParseBitOr();
             foreach (var op in new[] { "==", "!=", "<=", ">=", "<", ">" })
             {
                 if (Accept(op))
                 {
-                    return new Binary(op, node, ParseSum());
+                    return new Binary(op, node, ParseBitOr());
                 }
             }
 
             return node;
+        }
+
+        private Node ParseBitOr()
+        {
+            var node = ParseBitXor();
+            while (Peek("|") && !Peek("||"))
+            {
+                Accept("|");
+                node = new Binary("|", node, ParseBitXor());
+            }
+
+            return node;
+        }
+
+        private Node ParseBitXor()
+        {
+            var node = ParseBitAnd();
+            while (Accept("^"))
+            {
+                node = new Binary("^", node, ParseBitAnd());
+            }
+
+            return node;
+        }
+
+        private Node ParseBitAnd()
+        {
+            var node = ParseShift();
+            while (Peek("&") && !Peek("&&"))
+            {
+                Accept("&");
+                node = new Binary("&", node, ParseShift());
+            }
+
+            return node;
+        }
+
+        private Node ParseShift()
+        {
+            var node = ParseSum();
+            while (true)
+            {
+                if (Accept("<<")) node = new Binary("<<", node, ParseSum());
+                else if (Accept(">>")) node = new Binary(">>", node, ParseSum());
+                else return node;
+            }
         }
 
         private Node ParseSum()
@@ -471,6 +602,11 @@ public sealed class SequenceExpression
             if (Accept("-"))
             {
                 return new Unary("-", ParseUnary());
+            }
+
+            if (Accept("~"))
+            {
+                return new Unary("~", ParseUnary());
             }
 
             var node = ParsePrimary();
@@ -583,6 +719,25 @@ public sealed class SequenceExpression
         private double ParseNumber()
         {
             var start = _position;
+            if (_text.AsSpan(_position).StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                _position += 2;
+                while (_position < _text.Length && Uri.IsHexDigit(_text[_position]))
+                {
+                    _position++;
+                }
+
+                var digits = _text[(start + 2).._position];
+                if (digits.Length is 0 or > 16 ||
+                    !long.TryParse(digits, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var bits) ||
+                    bits < 0 || bits > MaxExactInteger)
+                {
+                    throw Error($"'{_text[start.._position]}' is not a hexadecimal number that fits in 53 bits", start);
+                }
+
+                return bits;
+            }
+
             while (_position < _text.Length && (char.IsDigit(_text[_position]) || _text[_position] == '.'))
             {
                 _position++;

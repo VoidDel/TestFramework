@@ -467,7 +467,11 @@ reference the same way in an expression as in a parameter, and checks that every
 exists where it is evaluated. The language is strict on purpose: a condition must be a boolean,
 never truthy; text compared with a number, a division by zero or an undefined variable is an error
 rather than a guess. All numbers are doubles, and text that reads as a number compares as one,
-since a value typed into a run parameter arrives as text.
+since a value typed into a run parameter arrives as text. Bitwise `& | ^ ~ << >>` and hexadecimal
+literals read a status word; they bind tighter than the comparisons, as in Python rather than C,
+so `${faults} & 0x04 != 0` tests the bit, and they refuse a fraction rather than truncate it. A
+list is indexed by position and a dictionary by key, with the dictionary's own key comparison, so
+a signal table's `SOC` and `soc` stay two signals.
 
 A step parameter declared `StepParameterKind.Expression` is passed to its plugin unsubstituted -
 its `${}` are operands, and replacing a list variable with its text would destroy them - and the
